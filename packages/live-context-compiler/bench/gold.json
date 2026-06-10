@@ -1,0 +1,30 @@
+[
+  {
+    "name": "login slice includes auth dependencies",
+    "query": "login",
+    "policyName": "impact",
+    "expectedNodeNameFragments": ["login", "findUser", "createSession"],
+    "forbiddenNodeNameFragments": ["chargeCard"]
+  },
+  {
+    "name": "fetch consumer detected in client.ts",
+    "query": "loginFromUi",
+    "policyName": "endpoint_edit",
+    "expectedNodeNameFragments": ["loginFromUi", "/api/login"],
+    "forbiddenNodeNameFragments": ["chargeCard"]
+  },
+  {
+    "name": "route exposure detected from file entry",
+    "query": "routes.ts",
+    "policyName": "endpoint_edit",
+    "expectedNodeNameFragments": ["routes", "POST", "/api/login"],
+    "forbiddenNodeNameFragments": ["chargeCard"]
+  },
+  {
+    "name": "billing isolated from auth",
+    "query": "chargeCard",
+    "policyName": "impact",
+    "expectedNodeNameFragments": ["chargeCard"],
+    "forbiddenNodeNameFragments": ["login", "findUser"]
+  }
+]
