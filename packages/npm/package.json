@@ -1,5 +1,5 @@
 {
-  "name": "codeweave",
+  "name": "@mhndayesh/codeweave",
   "version": "0.1.0",
   "description": "AI coding agent with built-in repository context — no indexing overhead, no plugin config.",
   "license": "Apache-2.0",
