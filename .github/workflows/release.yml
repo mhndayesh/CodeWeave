@@ -1,0 +1,115 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  VERSION: ${{ github.ref_name }}
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target-os: linux
+            target-arch: x64
+            archive-ext: tar.gz
+          - os: macos-latest
+            target-os: darwin
+            target-arch: arm64
+            archive-ext: zip
+          - os: macos-13
+            target-os: darwin
+            target-arch: x64
+            archive-ext: zip
+          - os: windows-latest
+            target-os: win32
+            target-arch: x64
+            archive-ext: zip
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build binary
+        env:
+          OPENCODE_VERSION: ${{ env.VERSION }}
+        run: bun run packages/opencode/script/build.ts --single
+
+      - name: Package archive
+        shell: bash
+        run: |
+          DIST_DIR=$(ls -d packages/opencode/dist/opencode-* | head -1)
+          cd "$DIST_DIR/bin"
+          ARCHIVE_NAME="codeweave-${{ matrix.target-os }}-${{ matrix.target-arch }}.${{ matrix.archive-ext }}"
+          if [ "${{ matrix.archive-ext }}" = "tar.gz" ]; then
+            tar -czf "../../../$ARCHIVE_NAME" *
+          else
+            zip -r "../../../$ARCHIVE_NAME" *
+          fi
+          echo "archive=$ARCHIVE_NAME" >> $GITHUB_ENV
+          echo "Binary archive: $ARCHIVE_NAME"
+          ls -lh "../../../$ARCHIVE_NAME"
+
+      - name: Upload archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: codeweave-${{ matrix.target-os }}-${{ matrix.target-arch }}
+          path: ${{ env.archive }}
+
+  publish-npm:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$VERSION" \
+            --title "$VERSION" \
+            --generate-notes || true
+
+          for archive in release-artifacts/*/*; do
+            gh release upload "$VERSION" "$archive" --clobber
+          done
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      - name: Set package version
+        run: |
+          npm_version="${VERSION#v}"
+          cd packages/npm
+          npm version "$npm_version" --no-git-tag-version --allow-same-version
+
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          cd packages/npm
+          npm publish --provenance --access public

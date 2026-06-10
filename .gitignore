@@ -35,3 +35,4 @@ tsconfig.tsbuildinfo
 .context-graph.sqlite
 .context-graph.sqlite-shm
 .context-graph.sqlite-wal
+packages/npm/binary/

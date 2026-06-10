@@ -1,0 +1,25 @@
+{
+  "name": "codeweave",
+  "version": "0.1.0",
+  "description": "AI coding agent with built-in repository context — no indexing overhead, no plugin config.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mhndayesh/CodeWeave.git"
+  },
+  "homepage": "https://github.com/mhndayesh/CodeWeave",
+  "keywords": ["ai", "coding", "agent", "context", "code", "lcc"],
+  "bin": {
+    "codeweave": "./bin/codeweave.js"
+  },
+  "scripts": {
+    "postinstall": "node ./scripts/install.js",
+    "preuninstall": "node ./scripts/uninstall.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "os": ["linux", "darwin", "win32"],
+  "cpu": ["x64", "arm64"],
+  "preferUnplugged": true
+}
