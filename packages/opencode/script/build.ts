@@ -134,7 +134,7 @@ const targets = singleFlag
     })
   : allTargets
 
-await $`rm -rf dist`
+fs.rmSync("dist", { recursive: true, force: true })
 
 const binaries: Record<string, string> = {}
 if (!skipInstall) {
@@ -154,7 +154,7 @@ for (const item of targets) {
     .filter(Boolean)
     .join("-")
   console.log(`building ${name}`)
-  await $`mkdir -p dist/${name}/bin`
+  fs.mkdirSync(`dist/${name}/bin`, { recursive: true })
 
   const localPath = path.resolve(dir, "node_modules/@opentui/core/parser.worker.js")
   const rootPath = path.resolve(dir, "../../node_modules/@opentui/core/parser.worker.js")
@@ -199,7 +199,7 @@ for (const item of targets) {
   })
 
   const compilerOut = path.resolve(dir, `dist/${name}/lib/live-context-compiler`)
-  await $`mkdir -p ${compilerOut}`
+  fs.mkdirSync(compilerOut, { recursive: true })
   await Bun.build({
     entrypoints: [path.resolve(dir, "../live-context-compiler/src/cli.ts")],
     target: "node",
@@ -214,7 +214,7 @@ for (const item of targets) {
   // Ship the tree-sitter runtime + language grammars next to the compiler CLI so
   // it can parse Python/Rust/Go/Java/etc. Falls back to regex indexers if absent.
   const grammarsOut = path.join(compilerOut, "grammars")
-  await $`mkdir -p ${grammarsOut}`
+  fs.mkdirSync(grammarsOut, { recursive: true })
   const lccModules = [
     path.resolve(dir, "../live-context-compiler/node_modules"),
     path.resolve(dir, "../../node_modules"),
@@ -257,7 +257,7 @@ for (const item of targets) {
     }
   }
 
-  await $`rm -rf ./dist/${name}/bin/tui`
+  fs.rmSync(`dist/${name}/bin/tui`, { recursive: true, force: true })
   await Bun.file(`dist/${name}/package.json`).write(
     JSON.stringify(
       {

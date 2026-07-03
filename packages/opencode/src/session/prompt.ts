@@ -1332,10 +1332,25 @@ export const layer = Layer.effect(
               MessageV2.toModelMessagesEffect(msgs, model),
             ])
             const latestUserText = latestUserTextFromMessages(msgs)
-            const liveContext = latestUserText
-              ? yield* LiveContext.systemContext((yield* InstanceState.context).directory, latestUserText)
-              : undefined
-            const system = [...env, ...instructions, ...(skills ? [skills] : []), ...(liveContext ? [liveContext] : [])]
+            // On-demand by default. The per-turn context block is rebuilt from the
+            // current message every turn, so it changes the system prompt each time and
+            // defeats prompt caching (brutal on local models — the whole conversation
+            // gets reprocessed). Instead we inject a small STABLE hint and let the model
+            // pull context through the context_* tools when it actually needs it (tool
+            // output lands in the message history, which is append-only = cache-friendly).
+            // Set OPENCODE_LIVE_CONTEXT_AUTOINJECT=1 to restore always-on injection.
+            const liveContext =
+              process.env.OPENCODE_LIVE_CONTEXT_AUTOINJECT === "1" && latestUserText
+                ? yield* LiveContext.systemContext((yield* InstanceState.context).directory, latestUserText)
+                : undefined
+            const liveContextHint =
+              "This project has a built-in Live Context Compiler (a precise code graph). Call context_compile / context_expand / context_status to pull deterministic code structure on demand — prefer it over broad grep/glob when you need to understand the codebase. The graph builds itself on first use and updates incrementally."
+            const system = [
+              ...env,
+              ...instructions,
+              ...(skills ? [skills] : []),
+              ...(liveContext ? [liveContext] : [liveContextHint]),
+            ]
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
             const result = yield* handle.process({
