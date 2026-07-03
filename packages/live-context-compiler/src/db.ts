@@ -247,6 +247,29 @@ export class GraphStore {
     }));
   }
 
+  hasEvidenceFrom(method: string): boolean {
+    const row = this.db.prepare("SELECT 1 FROM edge_evidence WHERE source_method = ? LIMIT 1").get(method);
+    return Boolean(row);
+  }
+
+  // Symbol definitions with line ranges, for mapping LSP locations back to nodes.
+  definitionRanges(): Array<{ id: string; filePath: string; name: string; kind: string; startLine: number; endLine: number }> {
+    const rows = this.db
+      .prepare(
+        `SELECT stable_id, file_path, name, kind, start_line, end_line FROM nodes
+         WHERE kind IN ('function','class','method','interface','enum','type')`,
+      )
+      .all() as Record<string, unknown>[];
+    return rows.map((r) => ({
+      id: r.stable_id as string,
+      filePath: r.file_path as string,
+      name: r.name as string,
+      kind: r.kind as string,
+      startLine: Number(r.start_line),
+      endLine: Number(r.end_line),
+    }));
+  }
+
   // --- Edge operations ---
 
   upsertEdge(edge: CodeEdge): void {

@@ -9,6 +9,7 @@ import { runContractBridges, runContractFullScans } from "./contracts/index.js";
 import { getExclusion, redactSecrets } from "./security.js";
 import { getIndexerForFile, indexFileWithLanguage, getRegisteredExtensions } from "./languages/index.js";
 import { initTreeSitter } from "./languages/treesitter.js";
+import { resolvePythonLsp } from "./lsp/python.js";
 import type { CodeEdge, CodeNode, EdgeKind, NodeKind } from "./types.js";
 import { VERIFICATION } from "./types.js";
 
@@ -82,7 +83,23 @@ export class TsRepositoryIndexer {
       this.indexLanguageFile(file);
     }
     this.enrichReferences(langFiles);
+    await this.resolveSemantics(langFiles);
     runContractFullScans(this.store, this.root);
+  }
+
+  // Optional compiler-grade resolution pass (LSP). Best-effort, time-bounded,
+  // and disabled by OPENCODE_LIVE_CONTEXT_LSP=0. Never throws.
+  private async resolveSemantics(langFiles: string[]): Promise<void> {
+    if (process.env.OPENCODE_LIVE_CONTEXT_LSP === "0") return;
+    // Already resolved in a previous run (edges persist in the db) — skip the
+    // expensive server pass so later sessions re-index fast.
+    if (this.store.hasEvidenceFrom("pyright-lsp")) return;
+    const budget = numberEnv("OPENCODE_LIVE_CONTEXT_LSP_BUDGET_MS", 20000);
+    try {
+      await resolvePythonLsp(this.store, this.root, langFiles, budget);
+    } catch {
+      // semantic resolution is additive; ignore failures
+    }
   }
 
   // Second pass over non-TS files: emit REFERENCES edges from a file to any
@@ -737,6 +754,11 @@ export class TsRepositoryIndexer {
     );
     runContractBridges(this.store, rel, text, source, fileNodeId, this.root);
   }
+}
+
+function numberEnv(name: string, fallback: number): number {
+  const parsed = Number(process.env[name]);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function declarationName(node: ts.Node): string | undefined {

@@ -230,6 +230,16 @@ for (const item of targets) {
     console.warn("tree-sitter grammars not found; multi-language parsing falls back to regex")
   }
 
+  // Ship the pyright language server for tier-4 (compiler-grade) Python resolution.
+  // Optional: absent server just means Python stays at tree-sitter fidelity.
+  const pyrightSrc = findAsset("pyright")
+  if (pyrightSrc) {
+    await $`cp -R ${pyrightSrc} ${path.join(compilerOut, "pyright")}`
+    console.log(`Bundled pyright into ${path.join(compilerOut, "pyright")}`)
+  } else {
+    console.warn("pyright not found; Python semantic (LSP) resolution disabled")
+  }
+
   // Smoke test: only run if binary is for current platform
   if (item.os === process.platform && item.arch === process.arch && !item.abi) {
     const binaryPath = `dist/${name}/bin/opencode`
