@@ -222,9 +222,12 @@ for (const item of targets) {
   const findAsset = (rel: string) => lccModules.map((m) => path.join(m, rel)).find((p) => fs.existsSync(p))
   const coreWasm = findAsset("web-tree-sitter/tree-sitter.wasm")
   const grammarsSrc = findAsset("tree-sitter-wasms/out")
+  // Use fs.cpSync rather than the shell `cp` — bun's `$` cp -R is unreliable on Windows.
   if (coreWasm && grammarsSrc) {
-    await $`cp ${coreWasm} ${grammarsOut}/`
-    await $`cp ${grammarsSrc}/*.wasm ${grammarsOut}/`
+    fs.copyFileSync(coreWasm, path.join(grammarsOut, "tree-sitter.wasm"))
+    for (const f of fs.readdirSync(grammarsSrc)) {
+      if (f.endsWith(".wasm")) fs.copyFileSync(path.join(grammarsSrc, f), path.join(grammarsOut, f))
+    }
     console.log(`Bundled tree-sitter grammars into ${grammarsOut}`)
   } else {
     console.warn("tree-sitter grammars not found; multi-language parsing falls back to regex")
@@ -234,7 +237,8 @@ for (const item of targets) {
   // Optional: absent server just means Python stays at tree-sitter fidelity.
   const pyrightSrc = findAsset("pyright")
   if (pyrightSrc) {
-    await $`cp -R ${pyrightSrc} ${path.join(compilerOut, "pyright")}`
+    // realpathSync + dereference: bun installs pyright as a symlink into its store.
+    fs.cpSync(fs.realpathSync(pyrightSrc), path.join(compilerOut, "pyright"), { recursive: true, dereference: true })
     console.log(`Bundled pyright into ${path.join(compilerOut, "pyright")}`)
   } else {
     console.warn("pyright not found; Python semantic (LSP) resolution disabled")
