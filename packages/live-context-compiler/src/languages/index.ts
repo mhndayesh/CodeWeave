@@ -5,6 +5,7 @@ import { PythonIndexer } from "./python.js";
 import { RustIndexer } from "./rust.js";
 import { GoIndexer } from "./go.js";
 import { GenericIndexer } from "./generic.js";
+import { treeSitterExtract } from "./treesitter.js";
 
 // Dedicated language indexers first; the generic fallback matches last so a
 // specific indexer always wins for its extensions.
@@ -37,6 +38,14 @@ export function indexFileWithLanguage(
   text: string,
   root: string,
 ): boolean {
+  // Prefer a real tree-sitter parse (accurate symbols, nesting, line spans);
+  // fall back to the regex indexers when no grammar is loaded for this file.
+  const parsed = treeSitterExtract(text, filePath, root);
+  if (parsed) {
+    extractAndStore(store, parsed, filePath, root);
+    return true;
+  }
+
   const idx = getIndexerForFile(filePath);
   if (!idx) return false;
 

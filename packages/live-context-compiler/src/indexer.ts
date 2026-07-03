@@ -8,6 +8,7 @@ import { ModuleResolver } from "./resolver.js";
 import { runContractBridges, runContractFullScans } from "./contracts/index.js";
 import { getExclusion, redactSecrets } from "./security.js";
 import { getIndexerForFile, indexFileWithLanguage, getRegisteredExtensions } from "./languages/index.js";
+import { initTreeSitter } from "./languages/treesitter.js";
 import type { CodeEdge, CodeNode, EdgeKind, NodeKind } from "./types.js";
 import { VERIFICATION } from "./types.js";
 
@@ -76,6 +77,7 @@ export class TsRepositoryIndexer {
       this.indexFileWithProgram(file, this.programContext);
     }
     const langFiles = this.listLanguageFiles();
+    await initTreeSitter(new Set(langFiles.map((f) => path.extname(f).toLowerCase())));
     for (const file of langFiles) {
       this.indexLanguageFile(file);
     }

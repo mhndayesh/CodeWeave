@@ -2,6 +2,7 @@ import path from "node:path";
 import minimist from "minimist";
 import { GraphStore } from "./db.js";
 import { TsRepositoryIndexer } from "./indexer.js";
+import { initTreeSitter } from "./languages/treesitter.js";
 import { Invalidator } from "./invalidator.js";
 import { ContainerBuilder } from "./container-builder.js";
 import { SliceCache } from "./slice-cache.js";
@@ -135,6 +136,7 @@ if (command === "init") {
     store.close();
     process.exit(0);
   }
+  await initTreeSitter(new Set(dirty.map((f) => path.extname(f).toLowerCase())));
   for (const f of dirty) {
     const abs = path.join(root, f);
     indexer.indexFile(abs);

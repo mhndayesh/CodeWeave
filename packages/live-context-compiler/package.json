@@ -23,7 +23,9 @@
     "chokidar": "^4.0.3",
     "fast-glob": "^3.3.3",
     "minimist": "^1.2.8",
-    "typescript": "^5.8.2"
+    "tree-sitter-wasms": "0.1.13",
+    "typescript": "^5.8.2",
+    "web-tree-sitter": "0.25.10"
   },
   "devDependencies": {
     "@types/minimist": "^1.2.5",

@@ -169,7 +169,7 @@ for (const item of targets) {
     conditions: ["bun", "node"],
     tsconfig: "./tsconfig.json",
     plugins: [plugin],
-    external: ["node-gyp"],
+    external: ["node-gyp", "bun-pty"],
     format: "esm",
     minify: true,
     sourcemap: sourcemapsFlag ? "linked" : "none",
@@ -210,6 +210,25 @@ for (const item of targets) {
     naming: "cli.js",
   })
   await Bun.file(path.join(compilerOut, "package.json")).write(JSON.stringify({ type: "module" }, null, 2))
+
+  // Ship the tree-sitter runtime + language grammars next to the compiler CLI so
+  // it can parse Python/Rust/Go/Java/etc. Falls back to regex indexers if absent.
+  const grammarsOut = path.join(compilerOut, "grammars")
+  await $`mkdir -p ${grammarsOut}`
+  const lccModules = [
+    path.resolve(dir, "../live-context-compiler/node_modules"),
+    path.resolve(dir, "../../node_modules"),
+  ]
+  const findAsset = (rel: string) => lccModules.map((m) => path.join(m, rel)).find((p) => fs.existsSync(p))
+  const coreWasm = findAsset("web-tree-sitter/tree-sitter.wasm")
+  const grammarsSrc = findAsset("tree-sitter-wasms/out")
+  if (coreWasm && grammarsSrc) {
+    await $`cp ${coreWasm} ${grammarsOut}/`
+    await $`cp ${grammarsSrc}/*.wasm ${grammarsOut}/`
+    console.log(`Bundled tree-sitter grammars into ${grammarsOut}`)
+  } else {
+    console.warn("tree-sitter grammars not found; multi-language parsing falls back to regex")
+  }
 
   // Smoke test: only run if binary is for current platform
   if (item.os === process.platform && item.arch === process.arch && !item.abi) {
