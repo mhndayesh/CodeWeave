@@ -15,12 +15,14 @@ export class RustIndexer implements LanguageIndexer {
     const fileNode = makeFileNode(filePath, text, root);
     nodes.push(fileNode);
 
-    const fnRegex = /^(?:pub\s+(?:unsafe\s+)?)?fn\s+(\w+)/gm;
-    const structRegex = /^(?:pub\s+)?struct\s+(\w+)/gm;
-    const enumRegex = /^(?:pub\s+)?enum\s+(\w+)/gm;
-    const traitRegex = /^(?:pub\s+)?(?:unsafe\s+)?trait\s+(\w+)/gm;
-    const useRegex = /^use\s+(.+);/gm;
-    const implRegex = /^impl\s+(\w+)/gm;
+    // Allow leading indentation so methods inside `impl` blocks and items nested
+    // in modules are captured too.
+    const fnRegex = /^[ \t]*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:const\s+)?(?:unsafe\s+)?(?:extern\s+"[^"]*"\s+)?fn\s+(\w+)/gm;
+    const structRegex = /^[ \t]*(?:pub(?:\([^)]*\))?\s+)?struct\s+(\w+)/gm;
+    const enumRegex = /^[ \t]*(?:pub(?:\([^)]*\))?\s+)?enum\s+(\w+)/gm;
+    const traitRegex = /^[ \t]*(?:pub(?:\([^)]*\))?\s+)?(?:unsafe\s+)?trait\s+(\w+)/gm;
+    const useRegex = /^[ \t]*(?:pub\s+)?use\s+(.+);/gm;
+    const implRegex = /^[ \t]*impl(?:<[^>]*>)?\s+(?:\w+\s+for\s+)?(\w+)/gm;
 
     let match: RegExpExecArray | null;
 

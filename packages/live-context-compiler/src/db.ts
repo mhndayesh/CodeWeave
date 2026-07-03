@@ -231,6 +231,22 @@ export class GraphStore {
     return rows.map((r) => this.rowToNode(r));
   }
 
+  // Declared symbols (not files/packages), used to build a cross-file reference graph.
+  symbolDefinitions(): Array<{ id: string; name: string; kind: string; filePath: string }> {
+    const rows = this.db
+      .prepare(
+        `SELECT stable_id, name, kind, file_path FROM nodes
+         WHERE kind IN ('function','class','method','interface','enum','type')`,
+      )
+      .all() as Record<string, unknown>[];
+    return rows.map((r) => ({
+      id: r.stable_id as string,
+      name: r.name as string,
+      kind: r.kind as string,
+      filePath: r.file_path as string,
+    }));
+  }
+
   // --- Edge operations ---
 
   upsertEdge(edge: CodeEdge): void {

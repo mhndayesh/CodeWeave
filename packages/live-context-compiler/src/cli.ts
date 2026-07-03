@@ -27,6 +27,12 @@ const dbPath = path.resolve(
   args.db ?? path.join(root, ".context-graph.sqlite"),
 );
 
+function ignorePatternsArg(): string[] {
+  const raw = args["ignore-patterns"];
+  if (!raw) return [];
+  return (Array.isArray(raw) ? raw : [raw]).map(String);
+}
+
 if (command === "init") {
   const store = new GraphStore(dbPath);
   store.close();
@@ -36,13 +42,13 @@ if (command === "init") {
   console.log(`Path traversal guard: enabled`);
 } else if (command === "index") {
   const store = new GraphStore(dbPath);
-  const indexer = new TsRepositoryIndexer(store, root);
+  const indexer = new TsRepositoryIndexer(store, root, ignorePatternsArg());
   await indexer.indexAll();
   console.log(`Indexed ${root}`);
   store.close();
 } else if (command === "watch") {
   const store = new GraphStore(dbPath);
-  const indexer = new TsRepositoryIndexer(store, root);
+  const indexer = new TsRepositoryIndexer(store, root, ignorePatternsArg());
   const invalidator = new Invalidator(store);
   await indexer.indexAll();
   startWatcher(root, indexer, invalidator);
@@ -122,7 +128,7 @@ if (command === "init") {
   store.close();
 } else if (command === "reindex") {
   const store = new GraphStore(dbPath);
-  const indexer = new TsRepositoryIndexer(store, root);
+  const indexer = new TsRepositoryIndexer(store, root, ignorePatternsArg());
   const dirty = store.getDirtyFiles();
   if (dirty.length === 0) {
     console.log("No dirty files to re-index.");
@@ -141,7 +147,7 @@ if (command === "init") {
   const store = new GraphStore(dbPath);
 
   if (sub === "build") {
-    const indexer = new TsRepositoryIndexer(store, root);
+    const indexer = new TsRepositoryIndexer(store, root, ignorePatternsArg());
     await indexer.indexAll();
     const ignorePatterns = args["ignore-patterns"]
       ? (Array.isArray(args["ignore-patterns"]) ? args["ignore-patterns"] : [args["ignore-patterns"]])

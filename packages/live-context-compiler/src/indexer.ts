@@ -7,12 +7,46 @@ import { GraphStore } from "./db.js";
 import { ModuleResolver } from "./resolver.js";
 import { runContractBridges, runContractFullScans } from "./contracts/index.js";
 import { getExclusion, redactSecrets } from "./security.js";
+import { getIndexerForFile, indexFileWithLanguage, getRegisteredExtensions } from "./languages/index.js";
 import type { CodeEdge, CodeNode, EdgeKind, NodeKind } from "./types.js";
 import { VERIFICATION } from "./types.js";
 
 const SUPPORTED = ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx"];
-const IGNORE = ["**/node_modules/**", "**/dist/**", "**/.git/**", "**/coverage/**"];
+const LANGUAGE_GLOBS = getRegisteredExtensions().map((ext) => `**/*${ext}`);
+const IGNORE = [
+  "**/node_modules/**",
+  "**/dist/**",
+  "**/build/**",
+  "**/.git/**",
+  "**/coverage/**",
+  // Common heavy / generated dirs across ecosystems (esp. Python/Rust/Go)
+  "**/.venv/**",
+  "**/venv/**",
+  "**/env/**",
+  "**/__pycache__/**",
+  "**/.mypy_cache/**",
+  "**/.pytest_cache/**",
+  "**/site-packages/**",
+  "**/target/**",
+  "**/vendor/**",
+  "**/.next/**",
+  "**/.svelte-kit/**",
+  "**/*.min.js",
+];
 const TS_SOURCE_METHOD = "typescript-compiler";
+
+// Cross-file reference pass tuning. We only link a symbol whose name is defined
+// exactly once in the repo (high precision), is reasonably distinctive, and is
+// not a generic word — so heuristic edges stay useful rather than noisy.
+const REF_CAP_PER_FILE = 60;
+const REF_MIN_NAME_LENGTH = 4;
+const REF_STOPWORDS = new Set([
+  "main", "init", "setup", "index", "value", "result", "data", "name", "type",
+  "kind", "node", "edge", "item", "list", "self", "none", "null", "true", "false",
+  "config", "options", "context", "state", "error", "print", "input", "output",
+  "start", "close", "open", "read", "write", "build", "parse", "render", "update",
+  "create", "delete", "remove", "apply", "format", "handler", "builder", "test",
+]);
 
 interface ProgramContext {
   program: ts.Program;
@@ -25,12 +59,14 @@ export class TsRepositoryIndexer {
   private store: GraphStore;
   private resolver: ModuleResolver;
   private root: string;
+  private ignore: string[];
   private programContext?: ProgramContext;
 
-  constructor(store: GraphStore, root: string) {
+  constructor(store: GraphStore, root: string, ignorePatterns: string[] = []) {
     this.store = store;
     this.resolver = new ModuleResolver(root);
     this.root = root;
+    this.ignore = [...IGNORE, ...ignorePatterns];
   }
 
   async indexAll(): Promise<void> {
@@ -39,7 +75,62 @@ export class TsRepositoryIndexer {
     for (const file of files) {
       this.indexFileWithProgram(file, this.programContext);
     }
+    const langFiles = this.listLanguageFiles();
+    for (const file of langFiles) {
+      this.indexLanguageFile(file);
+    }
+    this.enrichReferences(langFiles);
     runContractFullScans(this.store, this.root);
+  }
+
+  // Second pass over non-TS files: emit REFERENCES edges from a file to any
+  // symbol whose name it mentions, when that name has a single, distinctive
+  // definition in the repo. Gives a cross-file usage graph for languages that
+  // have no compiler-grade resolver.
+  private enrichReferences(langFiles: string[]): void {
+    if (langFiles.length === 0) return;
+    const defs = this.store.symbolDefinitions();
+    if (defs.length === 0) return;
+
+    const byName = new Map<string, { id: string; filePath: string }>();
+    const ambiguous = new Set<string>();
+    for (const d of defs) {
+      const name = d.name;
+      if (name.length < REF_MIN_NAME_LENGTH || REF_STOPWORDS.has(name.toLowerCase())) continue;
+      if (ambiguous.has(name)) continue;
+      if (byName.has(name)) {
+        byName.delete(name);
+        ambiguous.add(name);
+        continue;
+      }
+      byName.set(name, { id: d.id, filePath: d.filePath });
+    }
+    if (byName.size === 0) return;
+
+    const identRe = /[A-Za-z_][A-Za-z0-9_]*/g;
+    for (const abs of langFiles) {
+      if (!fs.existsSync(abs)) continue;
+      const rel = path.relative(this.root, abs).replaceAll("\\", "/");
+      const fileId = stableId(this.root, "generic", `file:${rel}`);
+      const text = fs.readFileSync(abs, "utf8");
+      const seen = new Set<string>();
+      let m: RegExpExecArray | null;
+      identRe.lastIndex = 0;
+      while ((m = identRe.exec(text)) !== null) {
+        const def = byName.get(m[0]);
+        if (!def || def.filePath === rel || seen.has(def.id)) continue;
+        seen.add(def.id);
+        this.store.upsertEdge({
+          sourceId: fileId,
+          targetId: def.id,
+          kind: "REFERENCES",
+          verification: VERIFICATION.PATTERN_MATCHED,
+          sourceMethod: "cross-ref",
+          metadata: { name: m[0] },
+        });
+        if (seen.size >= REF_CAP_PER_FILE) break;
+      }
+    }
   }
 
   invalidateAll(): void {
@@ -48,6 +139,12 @@ export class TsRepositoryIndexer {
   }
 
   indexFile(absPath: string): void {
+    // Non-TS/JS files handled by a dedicated or generic language indexer.
+    if (getIndexerForFile(absPath)) {
+      this.indexLanguageFile(absPath);
+      return;
+    }
+
     if (!fs.existsSync(absPath)) {
       const rel = path.relative(this.root, absPath).replaceAll("\\", "/");
       this.store.clearFile(rel, true);
@@ -60,10 +157,45 @@ export class TsRepositoryIndexer {
     this.indexFileWithProgram(absPath, this.programContext);
   }
 
+  private listLanguageFiles(): string[] {
+    if (LANGUAGE_GLOBS.length === 0) return [];
+    return fg.sync(LANGUAGE_GLOBS, {
+      cwd: this.root,
+      ignore: this.ignore,
+      absolute: true,
+    }).filter((file) => {
+      const rel = path.relative(this.root, file).replaceAll("\\", "/");
+      return getExclusion(rel)?.action !== "skip";
+    });
+  }
+
+  private indexLanguageFile(absPath: string): void {
+    const rel = path.relative(this.root, absPath).replaceAll("\\", "/");
+
+    if (!fs.existsSync(absPath)) {
+      this.store.clearFile(rel, true);
+      return;
+    }
+
+    const exclusion = getExclusion(rel);
+    if (exclusion?.action === "skip") return;
+
+    const rawText = fs.readFileSync(absPath, "utf8");
+    const text = exclusion?.action === "redact" ? redactSecrets(rawText) : rawText;
+    const digest = sha256(text);
+    if (this.store.indexedHash(rel) === digest) return;
+
+    this.store.transaction(() => {
+      this.store.clearFile(rel);
+      indexFileWithLanguage(this.store, rel, text, this.root);
+      this.store.markIndexed(rel, digest);
+    });
+  }
+
   private listSourceFiles(): string[] {
     return fg.sync(SUPPORTED, {
       cwd: this.root,
-      ignore: IGNORE,
+      ignore: this.ignore,
       absolute: true,
     }).filter((file) => {
       const rel = path.relative(this.root, file).replaceAll("\\", "/");
