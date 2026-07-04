@@ -1,0 +1,4 @@
+# Machine-specific benchmark outputs (reproducible via run.ps1)
+results/
+__pycache__/
+*.sqlite
