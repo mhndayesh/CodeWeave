@@ -9,97 +9,137 @@
 <h1 align="center">CodeWeave</h1>
 
 <p align="center">
-  <strong>AI coding agent with built-in repository context — no indexing overhead, no plugin config.</strong>
+  <strong>An AI coding agent with a built-in, code-aware graph of your repo —<br/>so the model <em>understands</em> your codebase instead of grepping around it.</strong>
 </p>
 
-CodeWeave is a fork of [OpenCode](https://opencode.ai) with the **Live Context Compiler** built directly into the agent harness. It automatically indexes your codebase and injects relevant context into every LLM call — no manual setup, no external services, no API costs.
+CodeWeave is a fork of [OpenCode](https://opencode.ai) with the **Live Context Compiler** built in: a fast, deterministic **code graph** the AI uses to understand your project precisely. The heavy lifting is done by **real code analysis** — the TypeScript compiler, tree-sitter, and pyright — while the AI just *asks for what it needs, on demand*.
 
-## What Makes It Different
+📖 **[Overview](./CODEWEAVE_DOCS.md)** · 🧭 **[Commands & usage](./COMMANDS.md)**
 
-Most AI coding tools require you to manually select files, configure RAG pipelines, or wait for cloud-based indexing. CodeWeave's Live Context Compiler runs **entirely locally** and **deterministically** — it builds a graph of your codebase using TypeScript's compiler API, then renders the most relevant slice into the model's context automatically.
+---
 
-- **Zero LLM calls for indexing** — purely AST-based static analysis
-- **Zero cloud dependency** — everything runs on your machine
-- **Zero plugin config** — built into the agent, not bolted on
-- **Git-aware invalidation** — edits to files trigger automatic re-indexing
+## What makes it different
 
-## How It Works
+- **Real code analysis, not LLM guessing.** The graph is built by the **TypeScript compiler API** (TS/JS), **tree-sitter** (30+ languages), and **pyright** (semantic Python). The AI only *triggers* it; the *code* does the work.
+- **On-demand + cached.** Context is pulled **once, when needed**, then reused. Your 2nd/3rd/4th messages only process what you typed — not the whole codebase again. (First message builds it; the rest are fast.)
+- **Local & deterministic.** Everything runs on your machine — no cloud indexing, no API costs. Same input → same graph.
+- **Confidence tiers.** Every edge is tagged **tier‑4** (compiler/type-resolved), **tier‑2** (tree-sitter/heuristic), or **tier‑0** (hint), so the model knows what to trust.
 
-1. Open a project directory.
-2. Run `codeweave`.
-3. The Live Context Compiler silently indexes your codebase (`.ts`, `.tsx`, `.js`, `.jsx`), building a graph of symbols, types, imports, and call relationships.
-4. Before each model call, CodeWeave automatically extracts a relevant context slice — functions, files, routes, schemas — and injects it into the system prompt.
-5. The model can also call `context_compile`, `context_expand`, and `context_status` directly for deeper exploration.
+---
 
-## Built-in Tools
+## Languages
 
-| Tool | Description |
-|------|-------------|
-| `context_compile` | Compile context for a symbol, path, route, or table. Supports traversal policies: `minimal`, `function_edit`, `endpoint_edit`, `schema_edit`, `impact`. |
-| `context_expand` | Compile additional context while keeping graph-first exploration. |
-| `context_status` | Show graph status — file, node, edge, and container counts. |
+| Fidelity | Languages | How |
+|---|---|---|
+| **Highest** | `.ts` `.tsx` `.js` `.jsx` | TypeScript compiler API |
+| **Semantic** | `.py` | pyright (type-aware) + tree-sitter |
+| **Structural** | Rust, Go, Java, C/C++, C#, Ruby, PHP, Swift, Kotlin, Scala, Lua, Dart, and ~20 more | tree-sitter |
 
-## Smart Budget Allocation
+Cross-file references are resolved for all of them; Python and TS/JS get true type-aware resolution.
 
-Each context slice is rendered within a token budget with priority-phased allocation:
+---
 
-| Phase | Content |
-|-------|---------|
-| 1. Entry source | Always rendered — the matched symbol/function/file |
-| 2. Entry edges | Direct relationships (imports, calls, contains) |
-| 3. Tier 0-1 source | Nearby functions, classes, files with context lines |
-| 4. Other edges | Broader graph relationships |
-| 5. Routes / Unresolved | Route registrations and unresolved references |
+## Quick start
 
-Per-call overrides via `renderMode` (`balanced`, `source-first`, `edges-first`) let the model tilt allocation as needed.
+```sh
+cd your-project
+opencode
+```
 
-## Optional Runtime Data
+Then just **ask naturally**:
 
-CodeWeave can import real execution data to produce Tier 5 (highest confidence) edges:
+- *"What does `Session.send` call?"*
+- *"How does auth work in this repo?"*
 
-- **Test traces** — `**/.test-traces/*.json` — which functions each test actually calls
-- **OpenTelemetry** — `**/.otel-traces/*.json` — distributed trace topology and production call patterns
-- **Coverage** — `**/coverage/lcov.info` — line-level execution frequency
+The AI pulls the code map on its own when it needs to — **you don't have to do anything extra.**
 
-These are optional. Without them, the compiler still produces Tier 3-4 edges from TypeScript static analysis.
+---
 
-## Configuration
+## Commands
 
-Configure via `opencode.json` or `opencode.jsonc`:
+| Command | What it does |
+|---|---|
+| **`opencode`** | Start the assistant (your day-to-day tool) |
+| **`/context <symbol>`** | *(inside opencode)* force a precise graph pull, e.g. `/context Session.request` |
+| **`/reindex`** | *(inside opencode)* rebuild the graph after big changes |
+| **`opencode-graph`** | Build the graph directly in a terminal — **no AI**, pure indexer |
+| **`opencode-help`** | Print the quick cheat-sheet |
+
+Full reference → **[COMMANDS.md](./COMMANDS.md)**.
+
+### AI tools (the model calls these — you don't)
+
+| Tool | Purpose |
+|---|---|
+| `context_compile` | Pull the graph slice for a symbol/path/phrase (definition + callers + references) |
+| `context_expand` | Pull an additional/adjacent slice |
+| `context_status` | Show graph status (file / node / edge counts) |
+
+---
+
+## How it works
+
+1. The compiler indexes your project into a **graph** (`.context-graph.sqlite` at the project root) using real parsers — no LLM involved.
+2. The AI calls `context_compile` with a symbol/path/phrase → gets the relevant slice (definition + callers + references), already connected across files.
+3. The graph **builds once** on first use and updates **incrementally** on edits.
+4. Context is **on-demand**, not force-injected every turn — that's what keeps prompt caching (and your follow-up messages) fast.
+
+> Want the old always-on injection back? Set `OPENCODE_LIVE_CONTEXT_AUTOINJECT=1`.
+
+---
+
+## Benchmarks
+
+Measured locally (Windows), first-time **full** index. The graph builds **once**, then re-indexes incrementally — much faster after that.
+
+| Repo | Files | Nodes | Edges | First index |
+|---|---|---|---|---|
+| **CodeWeave** (this TS monorepo) | 1,827 | 12,622 | 92,516 | ~50s |
+| **psf/requests** (Python) | 37 | 757 | 2,176 (1,508 tier‑4 pyright) | ~10s |
+| **townsim** (Python) | 67 | 934 | 2,457 (with pyright) | ~25s · re-index **~2s** |
+
+- **Query / symbol lookup:** effectively instant (SQLite FTS5-backed).
+- **Context slice:** sub-second from the built graph.
+- **Large monorepos** need more Node heap (`NODE_OPTIONS=--max-old-space-size=8192`) and a higher timeout — see [COMMANDS.md](./COMMANDS.md#5-environment-variables-advanced--setup).
+
+*Numbers vary by machine and whether pyright's semantic pass runs (Python only).*
+
+---
+
+## Configuration (`opencode.json`)
 
 ```jsonc
 {
   "liveContextCompiler": {
-    "ignorePatterns": ["**/generated/**"],
+    "ignorePatterns": ["**/node_modules/**", "**/dist/**", "**/.venv/**"],
     "defaultMaxTokens": 12000,
-    "renderMode": "balanced"
+    "renderMode": "balanced"   // balanced | source-first | edges-first
   }
 }
 ```
 
-| Key | Description |
-|-----|-------------|
-| `ignorePatterns` | Glob patterns to exclude from indexing |
-| `defaultMaxTokens` | Token budget per context slice (default: 12000, max: 50000) |
-| `renderMode` | Default allocation: `balanced`, `source-first`, or `edges-first` |
+Environment variables (paths, timeouts, memory) are documented in **[COMMANDS.md](./COMMANDS.md#5-environment-variables-advanced--setup)**.
 
-## Performance
+---
 
-On a real-world benchmark (Directus, 5.23M tokens, 3,037 files):
+## Optional runtime data (tier‑5, highest confidence)
 
-| Phase | Time |
-|-------|------|
-| Full index | ~30s |
-| FTS5 query | ~260ms |
-| Context slice (impact/8K) | ~1.8s |
-| Container build | ~24s baseline |
+CodeWeave can import real execution data to add the most trustworthy edges:
 
-The graph database is a local SQLite file (`.context-graph.sqlite`, ~124MB for the Directus benchmark).
+- **Test traces** — which functions each test actually calls
+- **OpenTelemetry** — production call topology
+- **Coverage** (`lcov`) — line-level execution frequency
+
+These are optional; without them, the compiler still produces tier‑2 to tier‑4 edges from static analysis.
+
+---
 
 ## Safety
 
-CodeWeave includes built-in security exclusions — `.env*`, `.npmrc`, `.pypirc`, `.netrc`, SSH keys, private keys, `node_modules`, `dist`, coverage output, and the graph database itself are all excluded from indexing by default.
+Secrets and noise are excluded from indexing by default — `.env*`, `.npmrc`, `.netrc`, SSH/private keys, `node_modules`, `dist`, `.venv`, coverage output, and the graph database itself.
+
+---
 
 ## License
 
-This project is based on [OpenCode](https://opencode.ai), which is licensed under the Apache License 2.0.
+Based on [OpenCode](https://opencode.ai), licensed under the Apache License 2.0.
