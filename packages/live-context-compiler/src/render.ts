@@ -295,10 +295,16 @@ export function renderSlice(
         a.filePath.localeCompare(b.filePath) || a.startLine - b.startLine,
     );
 
-  // Pre-classify edges
-  const renderEdges = slice.edges.filter(
-    (e) => e.verification !== VERIFICATION.ANNOTATION_ONLY,
-  );
+  // Pre-classify edges. Within each phase the budget truncates the tail, so order
+  // edges most-trustworthy first (compiler/runtime-verified before pattern-matched
+  // before unresolved). This spends a tight budget on precise edges and drops the
+  // heuristic ones first, instead of rendering whatever order the slice happened to
+  // collect them in.
+  const byConfidence = (a: { verification: number }, b: { verification: number }) =>
+    b.verification - a.verification;
+  const renderEdges = slice.edges
+    .filter((e) => e.verification !== VERIFICATION.ANNOTATION_ONLY)
+    .sort(byConfidence);
   const entryEdges = renderEdges.filter(
     (e) => entrySet.has(e.sourceId) || entrySet.has(e.targetId),
   );

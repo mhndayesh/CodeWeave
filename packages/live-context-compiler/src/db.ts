@@ -81,6 +81,11 @@ export class GraphStore {
         indexed_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS lsp_resolved_files (
+        file_path TEXT PRIMARY KEY,
+        resolved_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
       CREATE TABLE IF NOT EXISTS containers (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -409,6 +414,44 @@ export class GraphStore {
     return row?.content_hash;
   }
 
+  // --- Semantic (LSP) resolution tracking ---
+  // Records which files pyright has already resolved so the (time-bounded) semantic pass
+  // resumes on the still-unresolved files each run, accruing coverage to 100% over several
+  // indexes instead of being permanently capped by one 20s budget.
+
+  markLspResolved(filePath: string): void {
+    this.db
+      .prepare(
+        `INSERT INTO lsp_resolved_files(file_path, resolved_at)
+       VALUES(?, datetime('now'))
+       ON CONFLICT(file_path) DO UPDATE SET resolved_at=excluded.resolved_at`,
+      )
+      .run(filePath);
+  }
+
+  lspResolvedFiles(): Set<string> {
+    const rows = this.db
+      .prepare("SELECT file_path FROM lsp_resolved_files")
+      .all() as { file_path: string }[];
+    return new Set(rows.map((r) => r.file_path));
+  }
+
+  // Files ranked by how referenced their symbols are in the (heuristic) graph so far —
+  // the most-referenced symbols are the ones most likely to land in a slice, so the
+  // budgeted semantic pass spends its time replacing their fuzzy edges with precise ones first.
+  filesByReferenceHotness(): string[] {
+    const rows = this.db
+      .prepare(
+        `SELECT n.file_path AS file_path, COUNT(*) AS c
+         FROM edges e JOIN nodes n ON n.stable_id = e.target_id
+         WHERE e.kind IN ('REFERENCES','CALLS')
+         GROUP BY n.file_path
+         ORDER BY c DESC`,
+      )
+      .all() as { file_path: string; c: number }[];
+    return rows.map((r) => r.file_path);
+  }
+
   // --- File-level operations ---
 
   clearFile(filePath: string, removeIncoming = false): void {
@@ -429,6 +472,11 @@ export class GraphStore {
     }
     this.db
       .prepare("DELETE FROM indexed_files WHERE file_path = ?")
+      .run(filePath);
+    // Drop the semantic-resolution marker too, so an edited file is re-resolved by
+    // pyright on the next index instead of keeping stale compiler edges.
+    this.db
+      .prepare("DELETE FROM lsp_resolved_files WHERE file_path = ?")
       .run(filePath);
     this.removeImportEdgesForFile(filePath);
     this.clearDirty(filePath);
@@ -456,6 +504,8 @@ export class GraphStore {
           .split(/\s+/)
           .map((w) => `"${w}"`)
           .join(" OR ");
+        // ORDER BY rank (bm25) so the strongest textual match leads; over-fetch so the
+        // symbol-relevance re-rank below has candidates to promote past a raw bm25 tie.
         const rows = this.db
           .prepare(
             `SELECT n.stable_id, n.version_hash, n.previous_stable_id, n.kind, n.name, n.qualified_name,
@@ -463,10 +513,13 @@ export class GraphStore {
              FROM nodes n
              JOIN nodes_fts fts ON n.stable_id = fts.stable_id
              WHERE nodes_fts MATCH ?
+             ORDER BY rank
              LIMIT ?`,
           )
-          .all(ftsQuery, limit) as Record<string, unknown>[];
-        if (rows.length > 0) return rows.map((r) => this.rowToNode(r));
+          .all(ftsQuery, Math.max(limit * 4, 20)) as Record<string, unknown>[];
+        if (rows.length > 0) {
+          return this.rankMatches(rows.map((r) => this.rowToNode(r)), query).slice(0, limit);
+        }
       } catch {
         // FTS5 query failed, fall through to LIKE
       }
@@ -484,9 +537,30 @@ export class GraphStore {
         `%${query}%`,
         `%${query}%`,
         `%${query}%`,
-        limit,
+        Math.max(limit * 4, 20),
       ) as Record<string, unknown>[];
-    return rows.map((r) => this.rowToNode(r));
+    return this.rankMatches(rows.map((r) => this.rowToNode(r)), query).slice(0, limit);
+  }
+
+  // A search hit becomes the slice's entry seed, so the *first* result must be the
+  // best one. bm25 alone treats a name match and a signature-substring match alike;
+  // promote exact-name, then prefix, then substring matches ahead of incidental ones,
+  // preferring declared symbols over files, and keep the existing order within a tier.
+  private rankMatches(nodes: CodeNode[], query: string): CodeNode[] {
+    const q = query.trim().toLowerCase();
+    const kindRank = (n: CodeNode) => (n.kind === "file" ? 1 : 0);
+    const nameRank = (n: CodeNode): number => {
+      const name = n.name.toLowerCase();
+      if (name === q) return 0;
+      if (name.startsWith(q)) return 1;
+      if (name.includes(q)) return 2;
+      if (n.qualifiedName.toLowerCase().includes(q)) return 3;
+      return 4;
+    };
+    return nodes
+      .map((n, i) => ({ n, i, score: nameRank(n) * 2 + kindRank(n) }))
+      .sort((a, b) => a.score - b.score || a.i - b.i)
+      .map((x) => x.n);
   }
 
   // --- Traversal ---
@@ -809,6 +883,7 @@ export class GraphStore {
     this.db.exec("DELETE FROM edges");
     this.db.exec("DELETE FROM nodes");
     this.db.exec("DELETE FROM indexed_files");
+    this.db.exec("DELETE FROM lsp_resolved_files");
     this.db.exec("DELETE FROM imports_index");
     this.db.exec("DELETE FROM dirty_files");
     if (this.hasFts) {

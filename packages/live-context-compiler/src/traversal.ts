@@ -236,8 +236,15 @@ function executeStep(
       candidates.push(...store.incoming(current.id, step.edgeKinds));
     }
 
+    // When a hot node has more neighbors than the cap, keep the most-trustworthy
+    // edges (compiler/runtime-verified before pattern-matched before unresolved)
+    // rather than whatever order the DB returned. This also steers expansion toward
+    // the highest-confidence neighbors, so the slice fills with signal, not noise.
     if (candidates.length > step.maxEdgesPerNode) {
-      candidates = candidates.slice(0, step.maxEdgesPerNode);
+      candidates = candidates
+        .slice()
+        .sort((a, b) => b.verification - a.verification)
+        .slice(0, step.maxEdgesPerNode);
     }
 
     for (const edge of candidates) {

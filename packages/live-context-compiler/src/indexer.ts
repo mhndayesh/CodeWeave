@@ -50,6 +50,22 @@ const REF_STOPWORDS = new Set([
   "create", "delete", "remove", "apply", "format", "handler", "builder", "test",
 ]);
 
+// Best-effort, language-agnostic removal of comments and string literals so the
+// cross-reference name scan only sees code. Strings are stripped before line comments
+// so a `#`/`//` inside a literal can't swallow it; approximate by design — over-stripping
+// only drops a heuristic (tier-2) edge, never a compiler-verified one.
+function stripCommentsAndStrings(text: string): string {
+  return text
+    .replace(/\/\*[\s\S]*?\*\//g, " ") // /* block comments */
+    .replace(/"""[\s\S]*?"""/g, " ") // python triple-quoted
+    .replace(/'''[\s\S]*?'''/g, " ")
+    .replace(/`(?:\\.|[^`\\])*`/g, " ") // template / backtick strings
+    .replace(/"(?:\\.|[^"\\\n])*"/g, " ") // "double"
+    .replace(/'(?:\\.|[^'\\\n])*'/g, " ") // 'single'
+    .replace(/#.*$/gm, " ") // python/shell/ruby line comments
+    .replace(/\/\/.*$/gm, " "); // c-style line comments
+}
+
 interface ProgramContext {
   program: ts.Program;
   checker: ts.TypeChecker;
@@ -73,26 +89,59 @@ export class TsRepositoryIndexer {
 
   async indexAll(): Promise<void> {
     const files = this.listSourceFiles();
-    this.programContext = this.createProgram(files);
-    for (const file of files) {
-      try {
-        this.indexFileWithProgram(file, this.programContext);
-      } catch (error) {
-        this.warnFileSkipped(file, error);
+    // Only build the TS program and re-index when TS/JS content actually changed.
+    // Building the program (type checker) over the whole repo is the dominant cost of
+    // a warm re-index, so skipping it when nothing changed is what makes re-index cheap.
+    const changedTs = files.filter((f) => this.contentChanged(f));
+    if (changedTs.length > 0) {
+      this.programContext = this.createProgram(files);
+      for (const file of changedTs) {
+        try {
+          this.indexFileWithProgram(file, this.programContext);
+        } catch (error) {
+          this.warnFileSkipped(file, error);
+        }
       }
     }
     const langFiles = this.listLanguageFiles();
     await initTreeSitter(new Set(langFiles.map((f) => path.extname(f).toLowerCase())));
+    const changedLang: string[] = [];
     for (const file of langFiles) {
       try {
-        this.indexLanguageFile(file);
+        if (this.indexLanguageFile(file)) changedLang.push(file);
       } catch (error) {
         this.warnFileSkipped(file, error);
       }
     }
-    this.enrichReferences(langFiles);
+    // Scope the cross-reference pass to changed files. Re-scanning unchanged files every
+    // run re-inserted duplicate edge_evidence rows (their edges were never cleared) and
+    // made a warm re-index re-read the whole repo. A changed file's stale edges are already
+    // dropped by clearFile before it is re-indexed, so re-enriching only those is correct.
+    if (changedLang.length > 0) {
+      this.enrichReferences(changedLang);
+    }
     await this.resolveSemantics(langFiles);
-    runContractFullScans(this.store, this.root);
+    if (changedTs.length > 0 || changedLang.length > 0) {
+      runContractFullScans(this.store, this.root);
+    }
+  }
+
+  // A file needs (re)indexing when it has never been indexed, or its current content
+  // hash differs from the stored one. Files with no prior hash short-circuit without a
+  // read so a cold index doesn't pay a redundant read here.
+  private contentChanged(absPath: string): boolean {
+    const rel = path.relative(this.root, absPath).replaceAll("\\", "/");
+    const prior = this.store.indexedHash(rel);
+    if (prior === undefined) return true;
+    try {
+      const exclusion = getExclusion(rel);
+      if (exclusion?.action === "skip") return false;
+      const raw = fs.readFileSync(absPath, "utf8");
+      const text = exclusion?.action === "redact" ? redactSecrets(raw) : raw;
+      return sha256(text) !== prior;
+    } catch {
+      return true;
+    }
   }
 
   // One file failing (a TS compiler assertion, a malformed source, etc.) must never abort the
@@ -108,12 +157,26 @@ export class TsRepositoryIndexer {
   // and disabled by OPENCODE_LIVE_CONTEXT_LSP=0. Never throws.
   private async resolveSemantics(langFiles: string[]): Promise<void> {
     if (process.env.OPENCODE_LIVE_CONTEXT_LSP === "0") return;
-    // Already resolved in a previous run (edges persist in the db) — skip the
-    // expensive server pass so later sessions re-index fast.
-    if (this.store.hasEvidenceFrom("pyright-lsp")) return;
+    const pyAbs = langFiles.filter((f) => f.toLowerCase().endsWith(".py"));
+    if (pyAbs.length === 0) return;
+
+    // Resume on files pyright hasn't resolved yet, prioritizing the ones whose symbols are
+    // most referenced (most likely to appear in a slice). A flat one-shot budget left large
+    // repos at ~0% compiler coverage; spreading the budget across runs lets it reach 100%.
+    const resolved = this.store.lspResolvedFiles();
+    const rel = (abs: string) => path.relative(this.root, abs).replaceAll("\\", "/");
+    const pending = pyAbs.filter((abs) => !resolved.has(rel(abs)));
+    if (pending.length === 0) return; // fully resolved already
+
+    const hotRank = new Map(this.store.filesByReferenceHotness().map((f, i) => [f, i]));
+    pending.sort((a, b) => (hotRank.get(rel(a)) ?? Infinity) - (hotRank.get(rel(b)) ?? Infinity));
+
     const budget = numberEnv("OPENCODE_LIVE_CONTEXT_LSP_BUDGET_MS", 20000);
     try {
-      await resolvePythonLsp(this.store, this.root, langFiles, budget);
+      const result = await resolvePythonLsp(this.store, this.root, pyAbs, budget, {
+        queryFiles: pending,
+      });
+      for (const f of result?.resolvedRel ?? []) this.store.markLspResolved(f);
     } catch {
       // semantic resolution is additive; ignore failures
     }
@@ -148,7 +211,10 @@ export class TsRepositoryIndexer {
       if (!fs.existsSync(abs)) continue;
       const rel = path.relative(this.root, abs).replaceAll("\\", "/");
       const fileId = stableId(this.root, "generic", `file:${rel}`);
-      const text = fs.readFileSync(abs, "utf8");
+      // Scan code only: a name that appears solely in a comment or string literal is
+      // a mention, not a reference. Stripping them removes the bulk of the false-positive
+      // file-level edges the heuristic used to emit (docstrings, error messages, examples).
+      const text = stripCommentsAndStrings(fs.readFileSync(abs, "utf8"));
       const seen = new Set<string>();
       let m: RegExpExecArray | null;
       identRe.lastIndex = 0;
@@ -205,27 +271,31 @@ export class TsRepositoryIndexer {
     });
   }
 
-  private indexLanguageFile(absPath: string): void {
+  // Returns true when it actually (re)indexed the file, false when it was skipped
+  // (missing, excluded, or unchanged) — the caller uses this to scope the cross-reference
+  // and contract passes to only what changed.
+  private indexLanguageFile(absPath: string): boolean {
     const rel = path.relative(this.root, absPath).replaceAll("\\", "/");
 
     if (!fs.existsSync(absPath)) {
       this.store.clearFile(rel, true);
-      return;
+      return false;
     }
 
     const exclusion = getExclusion(rel);
-    if (exclusion?.action === "skip") return;
+    if (exclusion?.action === "skip") return false;
 
     const rawText = fs.readFileSync(absPath, "utf8");
     const text = exclusion?.action === "redact" ? redactSecrets(rawText) : rawText;
     const digest = sha256(text);
-    if (this.store.indexedHash(rel) === digest) return;
+    if (this.store.indexedHash(rel) === digest) return false;
 
     this.store.transaction(() => {
       this.store.clearFile(rel);
       indexFileWithLanguage(this.store, rel, text, this.root);
       this.store.markIndexed(rel, digest);
     });
+    return true;
   }
 
   private listSourceFiles(): string[] {

@@ -42,7 +42,8 @@ export async function resolvePythonLsp(
   root: string,
   files: string[],
   budgetMs: number,
-): Promise<{ server: string; edges: number; symbols: number } | null> {
+  opts: { queryFiles?: string[] } = {},
+): Promise<{ server: string; edges: number; symbols: number; resolvedRel: string[] } | null> {
   const debug = process.env.OPENCODE_LIVE_CONTEXT_LSP_DEBUG === "1";
   const log = (...a: unknown[]) => { if (debug) console.error("[lsp]", ...a); };
   const pyFiles = files.filter((f) => f.toLowerCase().endsWith(".py"));
@@ -55,6 +56,9 @@ export async function resolvePythonLsp(
   const client = new LspClient(process.execPath, [server, "--stdio"], root);
   let edges = 0;
   let symbols = 0;
+  // Files fully queried within this run's budget — the caller marks them resolved so the
+  // next run resumes on the remainder.
+  const resolvedRel: string[] = [];
   try {
     const rootUri = pathToFileURL(root).href;
     const init = await client.request("initialize", {
@@ -99,7 +103,9 @@ export async function resolvePythonLsp(
     const fileNodeId = (rel: string) => stableId(root, "generic", `file:${rel}`);
 
     // pyFiles are absolute; store keys are repo-relative with forward slashes.
+    // Open the whole workspace for cross-file reference accuracy...
     const opened = pyFiles.slice(0, 4000); // absolute paths
+    const openedSet = new Set(opened);
     for (const abs of opened) {
       if (!fs.existsSync(abs)) continue;
       client.notify("textDocument/didOpen", {
@@ -108,17 +114,21 @@ export async function resolvePythonLsp(
     }
     await sleep(Math.min(8000, Math.max(3000, opened.length * 40)));
 
-    for (const abs of opened) {
+    // ...but only query references for the prioritized subset this run; the remainder
+    // is resolved on later runs so coverage accrues instead of being capped at one budget.
+    const toQuery = (opts.queryFiles?.length ? opts.queryFiles : opened).filter((f) => openedSet.has(f));
+    for (const abs of toQuery) {
       if (Date.now() > deadline || !client.alive) break;
       const rel = path.relative(root, abs).replaceAll("\\", "/");
       const uri = pathToFileURL(abs).href;
       const docSyms = await client.request("textDocument/documentSymbol", { textDocument: { uri } }, 8000);
-      if (!docSyms?.result) continue;
+      if (!docSyms?.result) { resolvedRel.push(rel); continue; }
       const flat: Sym[] = [];
       flattenSymbols(docSyms.result, flat);
       log(rel, "symbols:", flat.length, "| matched-to-nodes:", flat.filter((s) => lineToId.get(rel)?.get(s.range.start + 1)).length);
+      let cutoff = false;
       for (const sym of flat) {
-        if (Date.now() > deadline || !client.alive) break;
+        if (Date.now() > deadline || !client.alive) { cutoff = true; break; }
         const targetId = lineToId.get(rel)?.get(sym.range.start + 1);
         if (!targetId) continue;
         symbols++;
@@ -143,12 +153,14 @@ export async function resolvePythonLsp(
           edges++;
         }
       }
+      // Fully queried within budget → safe to mark resolved and skip on later runs.
+      if (!cutoff) resolvedRel.push(rel);
     }
-    log("done. symbols queried:", symbols, "edges added:", edges);
-    return { server: "pyright", edges, symbols };
+    log("done. symbols queried:", symbols, "edges added:", edges, "files resolved:", resolvedRel.length);
+    return { server: "pyright", edges, symbols, resolvedRel };
   } catch (e) {
     log("threw:", (e as Error)?.message);
-    return edges > 0 ? { server: "pyright", edges, symbols } : null;
+    return edges > 0 || resolvedRel.length > 0 ? { server: "pyright", edges, symbols, resolvedRel } : null;
   } finally {
     await client.shutdown();
   }
