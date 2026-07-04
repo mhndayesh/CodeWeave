@@ -44,9 +44,10 @@ The AI pulls the code map on its own when it needs to. **You don't have to do an
 ## How it works (one level deeper)
 
 1. The compiler indexes your project into a **graph** (nodes = functions/classes/files, edges = calls/references/imports) and stores it in `.context-graph.sqlite` at your project root.
-2. Each edge has a **confidence tier**: tier‑4 = compiler/type-checker resolved, tier‑2 = tree-sitter/heuristic, tier‑0 = unresolved hint. The AI is told which to trust.
-3. The AI calls the `context_compile` tool with a symbol/path/phrase → the compiler returns the relevant slice (definition + callers + references), already connected across files.
-4. Edits update the graph **incrementally** — only changed files are re-analyzed.
+2. Each edge has a **confidence tier**: tier‑4 = compiler/type-checker resolved, tier‑2 = tree-sitter/heuristic, tier‑0 = unresolved hint. When a slice has to fit a token budget, the compiler **keeps the highest-confidence edges first** and drops the fuzzy ones — so the AI gets precise, verified relationships, not noise.
+3. The AI calls the `context_compile` tool with a symbol/path/phrase → the compiler returns the relevant slice (definition + callers + references), already connected across files. The entry point is the **best** match for your query, not an arbitrary one.
+4. Edits update the graph **incrementally** — only changed files are re-analyzed, and re-indexing an unchanged project is near-instant.
+5. For Python, deep **type-aware (pyright)** resolution runs in the background and is **resumable** — re-index a big repo a few times and its precise coverage climbs toward complete, instead of stalling.
 
 ---
 

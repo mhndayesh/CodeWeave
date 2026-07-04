@@ -6,7 +6,11 @@ Compiles task-specific context slices from deterministic code relationships — 
 
 ## How It Works
 
-The indexer parses source files and builds a directed graph of `SymbolIdentity`-keyed nodes (files, functions, classes, routes, DB tables, env vars, events) connected by typed edges (`CALLS`, `IMPORTS`, `EXTENDS`, `EXPOSES_ROUTE`, `READS_TABLE`, 20 kinds total). A step-based traversal engine walks the graph from entry symbols following configurable policies, and a tier-based renderer produces raw source excerpts with strict token budgets.
+The indexer parses source files and builds a directed graph of `SymbolIdentity`-keyed nodes (files, functions, classes, routes, DB tables, env vars, events) connected by typed edges (`CALLS`, `IMPORTS`, `EXTENDS`, `EXPOSES_ROUTE`, `READS_TABLE`, 20 kinds total). Every edge carries a **verification tier** (compiler/pyright = 4, tree-sitter/heuristic = 2, unresolved = 0). A step-based traversal engine walks the graph from entry symbols following configurable policies, and a tier-based renderer produces raw source excerpts with strict token budgets.
+
+**Confidence-ranked truncation.** Both the traversal cap (edges per hot node) and the render budget sort candidates by verification tier before truncating, so a tight budget is spent on compiler-verified edges first and heuristic edges are dropped first — the slice fills with signal, not whatever order the graph happened to collect. Search seeds are ranked too (bm25 + exact/prefix/symbol preference), so the entry node is the best match, not an arbitrary one.
+
+**Incremental by default.** A content-hash per file skips unchanged files, and the expensive whole-repo passes (TS program build, cross-reference enrichment, contract scans) are gated and scoped to what actually changed — a warm re-index of an unchanged repo is near-instant.
 
 ```
 Source files → Parser → Graph (SQLite) → Traversal → Rendered Slice → LLM
@@ -73,15 +77,20 @@ SQLite via `node:sqlite` with FTS5 full-text search (LIKE fallback). Tables:
 - `containers` / `container_members` / `container_deps` — relation containers
 - `slice_cache` — version-gated cache entries
 - `dirty_files` — tracked for incremental re-indexing
+- `indexed_files` — per-file content hash for change detection
+- `lsp_resolved_files` — files pyright has resolved, so semantic resolution resumes on the rest
 
 ### Indexers
 
-| Language | Parser | File Extensions |
-|----------|--------|-----------------|
-| TypeScript/JavaScript | TS Compiler API | `.ts`, `.tsx`, `.js`, `.jsx` |
-| Python | Regex | `.py` |
-| Rust | Regex | `.rs` |
-| Go | Regex | `.go` |
+| Language | Parser | Semantic tier | File Extensions |
+|----------|--------|---------------|-----------------|
+| TypeScript/JavaScript | TS Compiler API | tier-4 (compiler) | `.ts`, `.tsx`, `.js`, `.jsx` |
+| Python | tree-sitter | tier-4 via **pyright LSP** | `.py` |
+| Rust | tree-sitter | tier-2 | `.rs` |
+| Go | tree-sitter | tier-2 | `.go` |
+| 30+ others (Java, C/C++, C#, Ruby, PHP, Swift, Kotlin, …) | tree-sitter / regex fallback | tier-2 | various |
+
+**Python semantic resolution (pyright)** is time-bounded and **resumable**: each `index` run spends its LSP budget (`OPENCODE_LIVE_CONTEXT_LSP_BUDGET_MS`, default 20s) on the still-unresolved files, prioritized by how referenced their symbols are, and records what it finished. Re-running `index` accrues tier-4 coverage toward 100% instead of being capped by a single budget — so large repos reach full compiler-grade coverage over a few passes rather than stalling near zero.
 
 ### Contract Bridges (`src/contracts/`)
 
@@ -155,11 +164,13 @@ npx tsx src/cli.ts serve --root /path/to/repo
 ## Development
 
 ```bash
-npm test            # Run all 163 tests (vitest)
+npm test            # Run the vitest suite (166 pass; 3 pre-existing Windows path-assertion failures)
 npm run typecheck   # TypeScript check
 npm run check       # Typecheck + tests
 npm run bench       # Run gold-set benchmarks
 ```
+
+For the accuracy / speed / token / live-model benchmarks against public repos, see [`../../bench/README.md`](../../bench/README.md).
 
 ## Project Structure
 
@@ -171,8 +182,9 @@ src/
   indexer.ts          — TS Compiler API indexer
   resolver.ts         — Module resolution with cache
   invalidator.ts      — Transitive dirty propagation
-  traversal.ts        — 5 step-based traversal policies
-  render.ts           — Tier-based rendering with token budget
+  traversal.ts        — 5 step-based policies; confidence-ranked edge truncation
+  render.ts           — Tier-based rendering; confidence-ranked, token-budgeted
+  lsp/                — pyright semantic resolution (resumable, prioritized)
   render-diff.ts      — Diff-as-annotation rendering
   budget.ts           — TokenBudget with configurable safety margin
   hash.ts             — SHA-256 stableId, versionHash
@@ -183,14 +195,15 @@ src/
   benchmark.ts        — Gold-set benchmark harness
   contracts/          — 11 contract bridges
   runtime/            — 3 runtime importers (test-trace, otel, coverage)
-  languages/          — 3 multi-language indexers (python, rust, go)
+  languages/          — tree-sitter (30+ langs) + regex fallback (python, rust, go, generic)
   mcp/                — MCP server (stdio JSON-RPC)
 test/
-  index.test.ts       — 66 Phase 1 tests
-  phase2.test.ts      — 21 container tests
-  phase3.test.ts      — 21 contract bridge tests
-  phase4.test.ts      — 17 context compiler tests
-  phase5.test.ts      — 10 runtime evidence tests
-  phase6.test.ts      — 7 multi-language tests
-  security.test.ts    — 21 security tests
+  index.test.ts       — Phase 1 tests
+  phase2.test.ts      — container tests
+  phase3.test.ts      — contract bridge tests
+  phase4.test.ts      — context compiler tests
+  phase5.test.ts      — runtime evidence tests
+  phase6.test.ts      — multi-language tests
+  phase7.test.ts      — edge-ranking (traversal + render confidence order)
+  security.test.ts    — security tests
 ```

@@ -75,6 +75,9 @@ The compiler runs as a small Node process next to the opencode binary. These con
 | `OPENCODE_LIVE_CONTEXT_TIMEOUT_MS` | Max time for one index (raise for huge repos) | `300000` (5 min) |
 | `NODE_OPTIONS` | Give Node more heap for large monorepos | `--max-old-space-size=8192` |
 | `OPENCODE_LIVE_CONTEXT_AUTOINJECT` | `1` = inject context every turn (old behavior, **breaks caching**). Default off = on-demand. | unset |
+| `OPENCODE_LIVE_CONTEXT_LSP` | `0` disables pyright semantic (tier-4) resolution for Python. Default on when pyright is present. | unset |
+| `OPENCODE_LIVE_CONTEXT_LSP_BUDGET_MS` | Time budget per index for pyright. It's **resumable** — each index resolves more files, so re-indexing a big repo a few times accrues full precise coverage. | `20000` (20s) |
+| `OPENCODE_LIVE_CONTEXT_PYRIGHT` | Explicit path to the pyright language server, if not auto-found. | `.../pyright/langserver.index.js` |
 
 > On the compiled binary, `NODE` and `CLI` are **required** — the bundled exe can't run a
 > plain `.js` by itself, so it needs a real Node and the explicit path to `cli.js`.
@@ -102,3 +105,8 @@ The compiler runs as a small Node process next to the opencode binary. These con
   cache). The AI pulls it via a tool only when needed, which keeps follow-ups fast.
 - Big monorepos: the first index can take a minute and needs memory — that's what the
   `TIMEOUT_MS` and `NODE_OPTIONS` settings above are for.
+- **Re-indexing is cheap:** an unchanged project re-indexes in a fraction of a second (only
+  changed files are re-analyzed), so `/reindex` and repeated `opencode-graph` runs are cheap.
+- **Precise Python coverage accrues:** pyright resolves as much as its time budget allows each
+  run and resumes on the rest next time. On a large Python repo, running the index a few times
+  (or raising `OPENCODE_LIVE_CONTEXT_LSP_BUDGET_MS`) climbs toward complete type-aware coverage.
