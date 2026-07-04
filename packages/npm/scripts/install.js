@@ -38,61 +38,7 @@ if (fs.existsSync(binaryPath)) {
   process.exit(0);
 }
 
-const url = `https://github.com/mhndayesh/CodeWeave/releases/download/v${version}/${assetName}`;
-console.log(`codeweave: downloading v${version} (${os}-${cpu})...`);
-
-fs.mkdirSync(binaryDir, { recursive: true });
-
-function download(url, dest) {
-  return new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(dest);
-    https.get(url, { headers: { "User-Agent": "codeweave-install" } }, (res) => {
-      if (res.statusCode === 302 || res.statusCode === 301) {
-        file.close();
-        fs.unlinkSync(dest);
-        return download(res.headers.location, dest).then(resolve, reject);
-      }
-      if (res.statusCode !== 200) {
-        file.close();
-        fs.unlinkSync(dest);
-        return reject(new Error(`HTTP ${res.statusCode} ${url}`));
-      }
-      res.pipe(file);
-      file.on("finish", () => file.close(resolve));
-    }).on("error", (err) => {
-      file.close();
-      try { fs.unlinkSync(dest); } catch {}
-      reject(err);
-    });
-  });
-}
-
-async function install() {
-  await download(url, archivePath);
-  console.log("codeweave: extracting...");
-
-  const extractTool = isLinux ? "tar" : "unzip";
-  const extractArgs = isLinux ? ["-xzf", archivePath, "-C", binaryDir] : ["-o", archivePath, "-d", binaryDir];
-
-  const result = spawnSync(extractTool, extractArgs, { stdio: "pipe" });
-  if (result.status !== 0) {
-    throw new Error(`${extractTool} extraction failed: ${result.stderr?.toString() || result.stdout?.toString() || "unknown error"}`);
-  }
-
-  try { fs.unlinkSync(archivePath); } catch {}
-
-  if (process.platform !== "win32") {
-    fs.chmodSync(binaryPath, 0o755);
-  }
-
-  if (!fs.existsSync(binaryPath)) {
-    throw new Error(`binary not found after extraction: ${binaryPath}`);
-  }
-
-  console.log(`codeweave v${version} ready`);
-}
-
-install().catch((err) => {
-  console.error(`codeweave: install failed: ${err.message}`);
-  process.exit(1);
-});
+// Skip download — binary is expected to be placed locally during dev builds.
+// In production, the binary is distributed via the opencode CLI installer.
+console.log(`codeweave v${version} — skipping binary download (use local build)`);
+process.exit(0);
