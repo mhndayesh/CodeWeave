@@ -6,7 +6,7 @@ import { initTreeSitter } from "./languages/treesitter.js";
 import { Invalidator } from "./invalidator.js";
 import { ContainerBuilder } from "./container-builder.js";
 import { SliceCache } from "./slice-cache.js";
-import { compileSlice, estimateTokenCount, POLICIES } from "./traversal.js";
+import { compileSlice, POLICIES } from "./traversal.js";
 import { renderSlice, type RenderMode } from "./render.js";
 import { startWatcher } from "./watcher.js";
 import { McpServer } from "./mcp/server.js";
@@ -100,8 +100,10 @@ if (command === "init") {
   });
   const rendered = renderSlice(root, slice, { maxTokens, renderMode });
   console.log(rendered);
+  // Honest estimate from the ACTUAL rendered text (~3.2 chars/token), not the structural
+  // node/edge count -- the latter under-counted rendered source and misled the budget.
   console.log(
-    `\n// Estimated tokens: ${estimateTokenCount(slice)} / ${maxTokens}`,
+    `\n// Estimated tokens: ~${Math.ceil(rendered.length / 3.2)} / ${maxTokens}`,
   );
   store.close();
 } else if (command === "invalidate") {

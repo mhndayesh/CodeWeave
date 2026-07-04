@@ -20,6 +20,14 @@ const DEFAULT_OPTIONS: RenderOptions = {
   minContextLines: 2,
 };
 
+// Real tokenizers count source at ~3 chars/token (denser than the old chars/4 assumption),
+// and stable-id/edge lines are denser still. Costing content at chars/4 -- plus charging every
+// edge a flat 3 tokens while it prints a ~200-char stable-id line -- made the render emit ~15x
+// its nominal budget in real tokens. Cost by actual length instead, and cap edge-line width.
+const CHARS_PER_TOKEN = 3.2;
+const MAX_EDGE_CHARS = 200;
+const tok = (chars: number): number => Math.ceil(chars / CHARS_PER_TOKEN);
+
 // ─── Phase budget allocation per (policy, renderMode) ──────────────────
 
 type Phase =
@@ -312,13 +320,13 @@ export function renderSlice(
       emit("// --- Entry Source ---", 5);
       phaseBudget -= 5;
       const excerpt = readExcerpt(entryNode, root, opts.minContextLines);
-      const cost = Math.min(Math.ceil(excerpt.length * 0.25), phaseBudget);
+      const cost = Math.min(tok(excerpt.length), phaseBudget);
       if (cost > 10) {
         emit(
           `>>> ENTRY ${entryNode.kind}: ${entryNode.qualifiedName} (${entryNode.filePath}:${entryNode.startLine}-${entryNode.endLine})`,
         );
         emit("```");
-        emit(excerpt.slice(0, Math.ceil(cost * 4)));
+        emit(excerpt.slice(0, Math.ceil(cost * CHARS_PER_TOKEN)));
         emit("```");
         globalBudget -= cost;
       }
@@ -337,8 +345,9 @@ export function renderSlice(
           break;
         }
         const meta = edge.metadata ? ` ${JSON.stringify(edge.metadata)}` : "";
-        const text = `// ${edge.sourceId} --[${edge.kind}]--> ${edge.targetId} [${edge.verification}]${meta}`;
-        const cost = 3;
+        let text = `// ${edge.sourceId} --[${edge.kind}]--> ${edge.targetId} [${edge.verification}]${meta}`;
+        if (text.length > MAX_EDGE_CHARS) text = text.slice(0, MAX_EDGE_CHARS) + " ...";
+        const cost = Math.max(3, tok(text.length));
         if (spent + cost <= phaseBudget) {
           emit(text);
           spent += cost;
@@ -365,19 +374,19 @@ export function renderSlice(
       }
 
       const excerpt = readExcerpt(node, root, tier <= 1 ? opts.minContextLines : 0);
-      const excerptTokens = Math.ceil(excerpt.length * 0.25);
+      const excerptTokens = tok(excerpt.length);
 
       if (tier <= 1) {
         const cost = Math.min(excerptTokens, phaseBudget);
         if (cost < 10) continue;
         emit(`>>> ${node.kind}: ${node.qualifiedName} (${node.filePath}:${node.startLine}-${node.endLine})`);
         emit("```");
-        emit(excerpt.slice(0, Math.ceil(cost * 4)));
+        emit(excerpt.slice(0, Math.ceil(cost * CHARS_PER_TOKEN)));
         emit("```");
         phaseBudget -= cost;
         globalBudget -= cost;
       } else if (node.signature) {
-        const sigTokens = Math.ceil(node.signature.length * 0.25);
+        const sigTokens = tok(node.signature.length);
         if (sigTokens <= phaseBudget) {
           emit(`// SIG ${node.kind}: ${node.qualifiedName} (${node.filePath}:${node.startLine})`);
           emit(`// ${node.signature}`);
@@ -400,8 +409,9 @@ export function renderSlice(
           break;
         }
         const meta = edge.metadata ? ` ${JSON.stringify(edge.metadata)}` : "";
-        const text = `// ${edge.sourceId} --[${edge.kind}]--> ${edge.targetId} [${edge.verification}]${meta}`;
-        const cost = 3;
+        let text = `// ${edge.sourceId} --[${edge.kind}]--> ${edge.targetId} [${edge.verification}]${meta}`;
+        if (text.length > MAX_EDGE_CHARS) text = text.slice(0, MAX_EDGE_CHARS) + " ...";
+        const cost = Math.max(3, tok(text.length));
         if (spent + cost <= phaseBudget) {
           emit(text);
           spent += cost;
