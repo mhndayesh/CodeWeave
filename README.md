@@ -90,19 +90,20 @@ Full reference → **[COMMANDS.md](./COMMANDS.md)**.
 
 ## Benchmarks
 
-Measured locally (Windows), first-time **full** index. The graph builds **once**, then re-indexes incrementally — much faster after that.
+Measured locally (Windows 11), cold **full** index with the shipping binary. The graph builds **once**, then re-indexes incrementally on edits.
 
-| Repo | Files | Nodes | Edges | First index |
-|---|---|---|---|---|
-| **CodeWeave** (this TS monorepo) | 1,827 | 12,622 | 92,516 | ~50s |
-| **psf/requests** (Python) | 37 | 757 | 2,176 (1,508 tier‑4 pyright) | ~10s |
-| **townsim** (Python) | 67 | 934 | 2,457 (with pyright) | ~25s · re-index **~2s** |
+| Repo | Files | Nodes | Edges | tier‑4 (type-checker resolved) | Full index | Re‑index |
+|---|---|---|---|---|---|---|
+| **CodeWeave** (this TS monorepo) | 2,705 | 20,777 | 131,850 | **49,295** (TypeScript compiler) | ~72s | ~16s |
+| **psf/requests** (Python) | 37 | 757 | 2,176 | **1,252** (pyright) | ~18s | ~2s |
 
+- **tier‑4** edges are calls resolved by the actual type checker (TypeScript compiler / pyright) — the highest-confidence links. The rest are tree‑sitter/heuristic (tier‑2) or external/unresolved (tier‑0, e.g. calls into libraries).
 - **Query / symbol lookup:** effectively instant (SQLite FTS5-backed).
 - **Context slice:** sub-second from the built graph.
+- **Re‑index** is a warm pass that re-hashes every file and rebuilds the compiler program, skipping unchanged files — so day-to-day edits are far cheaper than the one-time cold build.
 - **Large monorepos** need more Node heap (`NODE_OPTIONS=--max-old-space-size=8192`) and a higher timeout — see [COMMANDS.md](./COMMANDS.md#5-environment-variables-advanced--setup).
 
-*Numbers vary by machine and whether pyright's semantic pass runs (Python only).*
+*Numbers vary by machine. Both repos are public/self-hostable, so the table is reproducible.*
 
 ---
 
