@@ -1,57 +1,35 @@
 import { LiveContext } from "@opencode-ai/core/live-context"
 import { Effect, Schema } from "effect"
 import { InstanceState } from "@/effect/instance-state"
+import DESCRIPTION from "./live-context.txt"
 import * as Tool from "./tool"
 
-const Policy = Schema.Union([
-  Schema.Literal("minimal"),
-  Schema.Literal("function_edit"),
-  Schema.Literal("endpoint_edit"),
-  Schema.Literal("schema_edit"),
-  Schema.Literal("impact"),
-])
-
+// Dead-simple params, matching grep/glob: one required field, plain description.
 export const CompileParameters = Schema.Struct({
-  query: Schema.String.annotate({ description: "Symbol, path, route, table, or task phrase to compile context for." }),
-  policy: Policy.pipe(Schema.optional).annotate({ description: "Traversal policy. Omit for automatic classification." }),
-  maxTokens: Schema.Number.pipe(Schema.optional).annotate({ description: "Maximum rendered context tokens." }),
-  forceIndex: Schema.Boolean.pipe(Schema.optional).annotate({ description: "Force a full graph re-index first." }),
+  query: Schema.String.annotate({
+    description: 'A symbol, file/dir path, or plain phrase to understand (e.g. "Session.request", "packages/core/src/auth", "how login works").',
+  }),
 })
 
 export const StatusParameters = Schema.Struct({
-  forceIndex: Schema.Boolean.pipe(Schema.optional).annotate({ description: "Force a full graph re-index first." }),
+  forceIndex: Schema.optional(Schema.Boolean).annotate({ description: "Rebuild the graph from scratch first." }),
 })
 
 export const ContextCompileTool = Tool.define(
   "context_compile",
   Effect.succeed({
-    description:
-      "Compile deterministic repository context from the built-in Live Context Compiler graph. Use before broad grep/glob when the task needs codebase understanding.",
+    description: DESCRIPTION,
     parameters: CompileParameters,
     execute: (params: Schema.Schema.Type<typeof CompileParameters>) =>
       Effect.gen(function* () {
         const instance = yield* InstanceState.context
-        const output = yield* LiveContext.compile({
-          root: instance.directory,
-          query: params.query,
-          policy: params.policy,
-          maxTokens: params.maxTokens,
-          forceIndex: params.forceIndex,
-        })
+        const output = yield* LiveContext.compile({ root: instance.directory, query: params.query })
         return {
           title: params.query,
-          metadata: {
-            query: params.query,
-            policy: params.policy,
-            truncated: false,
-          },
+          metadata: { query: params.query, truncated: false },
           output,
         }
-      }).pipe(
-        Effect.catch((error: unknown) =>
-          unavailable(params.query, error, { query: params.query, policy: params.policy }),
-        ),
-      ),
+      }).pipe(Effect.catch((error: unknown) => unavailable(params.query, error, { query: params.query }))),
   }),
 )
 
@@ -59,39 +37,25 @@ export const ContextExpandTool = Tool.define(
   "context_expand",
   Effect.succeed({
     description:
-      "Compile another Live Context slice for an adjacent symbol/path/route/table while keeping graph-first exploration.",
+      "Pull an additional code-graph slice for another symbol/path/phrase while staying graph-first. Same as context_compile — use it to widen understanding to an adjacent piece of code.",
     parameters: CompileParameters,
     execute: (params: Schema.Schema.Type<typeof CompileParameters>) =>
       Effect.gen(function* () {
         const instance = yield* InstanceState.context
-        const output = yield* LiveContext.compile({
-          root: instance.directory,
-          query: params.query,
-          policy: params.policy,
-          maxTokens: params.maxTokens,
-          forceIndex: params.forceIndex,
-        })
+        const output = yield* LiveContext.compile({ root: instance.directory, query: params.query })
         return {
           title: params.query,
-          metadata: {
-            query: params.query,
-            policy: params.policy,
-            truncated: false,
-          },
+          metadata: { query: params.query, truncated: false },
           output,
         }
-      }).pipe(
-        Effect.catch((error: unknown) =>
-          unavailable(params.query, error, { query: params.query, policy: params.policy }),
-        ),
-      ),
+      }).pipe(Effect.catch((error: unknown) => unavailable(params.query, error, { query: params.query }))),
   }),
 )
 
 export const ContextStatusTool = Tool.define(
   "context_status",
   Effect.succeed({
-    description: "Show built-in Live Context Compiler graph status for the active project.",
+    description: "Show the code-graph status (file/node/edge counts) for the current project. Pass forceIndex to rebuild it.",
     parameters: StatusParameters,
     execute: (params: Schema.Schema.Type<typeof StatusParameters>) =>
       Effect.gen(function* () {
