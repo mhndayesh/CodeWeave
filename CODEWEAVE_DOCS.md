@@ -1,41 +1,65 @@
-# CodeWeave Documentation Summary
+# CodeWeave
 
-## Overview
-CodeWeave is an AI coding agent built on OpenCode with a **Live Context Compiler** built directly into the agent harness. It automatically indexes your codebase and injects relevant context into every LLM call — no manual setup, no external services, no API costs.
+CodeWeave is [opencode](https://github.com/sst/opencode) with a **Live Context Compiler** built in.
 
-## Key Features
-- **Live Context Compiler**: Builds a directed graph of your codebase using TypeScript's Compiler API.
-- **Zero LLM Indexing**: Uses purely AST-based static analysis.
-- **Zero Cloud Dependency**: Runs entirely locally.
-- **Git-Aware Invalidation**: Edits to files trigger automatic re-indexing.
-- **Smart Budget Allocation**: Renders context slices within a token budget using priority-phased allocation.
+In plain terms: it gives the AI a fast, accurate **map of your codebase** so it actually *understands* your code — instead of blindly grepping and reading files one by one.
 
-## Main Entry Points
-- `bun dev`: Run TUI mode.
-- `bun dev serve`: Start headless API server on port 4096.
-- `bun run --cwd packages/desktop dev`: Desktop app.
+---
+
+## Why it matters
+
+When you ask about your code, the AI can pull a precise map — **which function calls which, where things are defined, how a feature flows** — built by **real code analysis, not the AI guessing**:
+
+- **TypeScript compiler API** — TS/JS (highest accuracy)
+- **tree-sitter** — 30+ languages (Python, Rust, Go, Java, C/C++, Ruby, PHP, Swift, Kotlin, …)
+- **pyright** — semantic, type-aware Python
+
+The design is simple and deliberate:
+
+> **The AI only *triggers* it. The *code* does the work. The result is cached.**
+
+So it builds **once** on first use, then reuses — your 2nd, 3rd, 4th messages stay fast (no re-reading the whole codebase every time).
+
+---
+
+## Quick start
+
+```sh
+cd your-project
+opencode
+```
+
+Then just ask naturally:
+
+- *"What does `Session.send` call?"*
+- *"How does auth work in this repo?"*
+- *"Trace the flow when a request comes in."*
+
+The AI pulls the code map on its own when it needs to. **You don't have to do anything extra.**
+
+👉 Full command list and options: **[COMMANDS.md](./COMMANDS.md)**
+
+---
+
+## How it works (one level deeper)
+
+1. The compiler indexes your project into a **graph** (nodes = functions/classes/files, edges = calls/references/imports) and stores it in `.context-graph.sqlite` at your project root.
+2. Each edge has a **confidence tier**: tier‑4 = compiler/type-checker resolved, tier‑2 = tree-sitter/heuristic, tier‑0 = unresolved hint. The AI is told which to trust.
+3. The AI calls the `context_compile` tool with a symbol/path/phrase → the compiler returns the relevant slice (definition + callers + references), already connected across files.
+4. Edits update the graph **incrementally** — only changed files are re-analyzed.
+
+---
 
 ## Configuration (`opencode.json`)
-- `liveContextCompiler.ignorePatterns`: Glob patterns to exclude from indexing.
-- `liveContextCompiler.defaultMaxTokens`: Token budget per context slice (default: 12000).
-- `liveContextCompiler.renderMode`: Default allocation (`balanced`, `source-first`, `edges-first`).
 
-## Built-in Tools
-- `context_compile`: Compile context for a symbol, path, route, or table.
-- `context_expand`: Compile additional context while keeping graph-first exploration.
-- `context_status`: Show graph status.
+```jsonc
+{
+  "liveContextCompiler": {
+    "ignorePatterns": ["**/node_modules/**", "**/dist/**", "**/.venv/**"],
+    "defaultMaxTokens": 12000,
+    "renderMode": "balanced"   // balanced | source-first | edges-first
+  }
+}
+```
 
-## Style Guide (AGENTS.md)
-- **General**: Keep things in one function unless composable; avoid `try/catch` and `any`; use Bun APIs.
-- **Destructuring**: Avoid unnecessary destructuring; use dot notation.
-- **Imports**: Never alias imports; never use star imports; prefer dynamic imports for heavy modules.
-- **Variables**: Prefer `const`; use ternaries or early returns.
-- **Control Flow**: Avoid `else` statements; prefer early returns.
-- **Testing**: Avoid mocks; run tests from package dirs.
-- **Type Checking**: Always run `bun typecheck` from package directories.
-
-## Session Runtime (CONTEXT.md)
-- **System Context**: Structured collection of contextual facts presented to the model.
-- **Session History**: Projected chronological conversation selected for a provider turn.
-- **Context Source**: One independently observed typed value within the System Context.
-- **Context Epoch**: Span during which one effective agent's initially rendered System Context remains immutable.
+Everything else (env vars, all commands) is in **[COMMANDS.md](./COMMANDS.md)**.
