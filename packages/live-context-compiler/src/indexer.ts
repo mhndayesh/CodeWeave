@@ -75,16 +75,33 @@ export class TsRepositoryIndexer {
     const files = this.listSourceFiles();
     this.programContext = this.createProgram(files);
     for (const file of files) {
-      this.indexFileWithProgram(file, this.programContext);
+      try {
+        this.indexFileWithProgram(file, this.programContext);
+      } catch (error) {
+        this.warnFileSkipped(file, error);
+      }
     }
     const langFiles = this.listLanguageFiles();
     await initTreeSitter(new Set(langFiles.map((f) => path.extname(f).toLowerCase())));
     for (const file of langFiles) {
-      this.indexLanguageFile(file);
+      try {
+        this.indexLanguageFile(file);
+      } catch (error) {
+        this.warnFileSkipped(file, error);
+      }
     }
     this.enrichReferences(langFiles);
     await this.resolveSemantics(langFiles);
     runContractFullScans(this.store, this.root);
+  }
+
+  // One file failing (a TS compiler assertion, a malformed source, etc.) must never abort the
+  // whole index. Its transaction is already rolled back by GraphStore.transaction; we just log a
+  // single short line to stderr — never the full stack, which can be hundreds of KB of minified code.
+  private warnFileSkipped(absPath: string, error: unknown): void {
+    const rel = path.relative(this.root, absPath).replaceAll("\\", "/");
+    const reason = (error instanceof Error ? error.message : String(error)).split("\n")[0].slice(0, 200);
+    process.stderr.write(`[live-context] skipped ${rel}: ${reason}\n`);
   }
 
   // Optional compiler-grade resolution pass (LSP). Best-effort, time-bounded,
@@ -639,7 +656,15 @@ export class TsRepositoryIndexer {
     rel: string,
     context: ProgramContext,
   ): void {
-    const signature = context.checker.getResolvedSignature(node);
+    // TypeScript's checker can throw an internal assertion (e.g. "Debug Failure. No error for
+    // last overload signature") on certain overloaded calls. A single bad call must not abort
+    // indexing the whole repo — fall back to an UNRESOLVED_CALL edge instead.
+    let signature: ts.Signature | undefined;
+    try {
+      signature = context.checker.getResolvedSignature(node);
+    } catch {
+      signature = undefined;
+    }
     const declaration = signature?.declaration;
     const target = declaration ? this.targetNodeFromDeclaration(declaration, context) : null;
 

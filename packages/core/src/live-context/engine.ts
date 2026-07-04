@@ -7,6 +7,11 @@ import { classify, type PolicyName } from "./classifier"
 
 const indexed = new Set<string>()
 const DEFAULT_TIMEOUT_MS = 60_000
+// A failing sidecar command (e.g. a TypeScript compiler assertion) can dump hundreds of KB of
+// minified stack to stderr. That must never reach the model verbatim — it once turned a single
+// tool error into a ~150k-token prompt and an 8.5-minute stall. Keep only head + tail; the real
+// error text lives at the END of a Node crash dump, so the tail must be preserved.
+const MAX_DIAGNOSTIC_CHARS = 4_000
 export const DEFAULT_MAX_TOKENS = 12_000
 export const MIN_ALLOWED_TOKENS = 500
 export const MAX_ALLOWED_TOKENS = 50_000
@@ -144,16 +149,28 @@ function runCli(root: string, args: string[]) {
     timeout,
   })
   if (result.error) {
-    throw new Error(`Live Context command failed (${args[0]}): ${result.error.message}`)
+    throw new Error(`Live Context command failed (${args[0]}): ${truncateDiagnostic(result.error.message)}`)
   }
   if (result.signal) {
     throw new Error(`Live Context command ${args[0]} terminated by ${result.signal}`)
   }
   if (result.status !== 0) {
     const message = result.stderr.trim() || result.stdout.trim() || `Live Context command failed: ${args.join(" ")}`
-    throw new Error(message)
+    throw new Error(truncateDiagnostic(message))
   }
   return result.stdout.trimEnd()
+}
+
+// Clamp a diagnostic to a bounded head + tail so a runaway stderr (minified compiler crash,
+// etc.) can never be fed back to the model verbatim. Tail is kept largest because Node prints
+// the actual "Error: ..." line and stack at the very end of a crash dump.
+function truncateDiagnostic(text: string) {
+  const trimmed = text.trim()
+  if (trimmed.length <= MAX_DIAGNOSTIC_CHARS) return trimmed
+  const head = trimmed.slice(0, 1_000)
+  const tail = trimmed.slice(-2_500)
+  const elided = trimmed.length - head.length - tail.length
+  return `${head}\n\n… [${elided} characters of diagnostic output elided] …\n\n${tail}`
 }
 
 function dbPath(root: string) {
