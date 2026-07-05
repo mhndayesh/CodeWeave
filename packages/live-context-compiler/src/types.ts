@@ -41,6 +41,8 @@ export interface CodeNode {
   startLine: number;
   endLine: number;
   signature?: string;
+  /** Leading doc-comment / docstring summary (first line/sentence), captured at index time. */
+  doc?: string;
   language: string;
 }
 

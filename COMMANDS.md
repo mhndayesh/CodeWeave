@@ -44,7 +44,32 @@ These are how the AI talks to the code graph. Listed so you know what you're see
 | --- | --- |
 | `context_compile` | Pull the graph slice for a symbol/path/phrase (definition + callers + references) |
 | `context_expand` | Pull an additional/adjacent slice while staying graph-first |
-| `context_status` | Show graph status (file / node / edge counts) |
+| `context_status` | Show graph status (file / node / edge / entry-point counts) |
+
+A compiled slice also carries **intent**, not just structure: each symbol shows its
+one-line **doc summary** (JSDoc / docstring / leading comment), the **nearest project doc**
+(`README` / `AGENTS.md` / `CONTEXT.md`) is attached for design context, and a phrase query
+matches that prose — so *"how does billing work"* finds the code even when no symbol is
+named `billing`.
+
+---
+
+## 3b. What the graph captures
+
+Beyond calls and imports, the indexer records the things that make a large codebase
+navigable — no configuration required:
+
+| Signal | What it gives the AI |
+| --- | --- |
+| **Doc summaries** | Each symbol/module's docstring or leading comment — searchable and shown inline, so the AI sees *why*, not only *what*. |
+| **Doc files** | `.md` / `.mdx` / `.rst` / `.adoc` indexed as nodes (title + headings + intro); the nearest one is attached to every slice. |
+| **Entry points** | `package.json` `bin`/`main`, Python `__main__`, and conventional names (`main`, `cli`, `server`, `app`) bias search toward where a reader would start. Count shown in `stats`. |
+| **Dynamic imports** | `import("…")` / `require("…")` stay in the import graph, so lazily-loaded and code-split modules aren't lost. |
+| **Registries** | `@Registry.register`-style decorations link a handler to its registry, keeping runtime-dispatched handlers connected. |
+
+These populate on the next index; run `/reindex` (or `opencode-graph`) once after upgrading
+to fill them into an existing `.context-graph.sqlite` — the store migrates in place, no full
+rebuild needed.
 
 ---
 

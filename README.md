@@ -21,6 +21,7 @@ CodeWeave is a fork of [OpenCode](https://opencode.ai) with the **Live Context C
 ## What makes it different
 
 - **Real code analysis, not LLM guessing.** The graph is built by the **TypeScript compiler API** (TS/JS), **tree-sitter** (30+ languages), and **pyright** (semantic Python). The AI only *triggers* it; the *code* does the work.
+- **Intent, not just structure.** Beyond *what calls what*, the graph captures a little of *why*: every symbol carries its **doc-comment summary** (searchable + shown inline), your **doc files** (`README`, `AGENTS.md`, `CONTEXT.md`, Markdown/rst) are indexed and the nearest one is attached to each slice, **entry points** bias search toward where a reader would start, and **registry decorators** (`@Registry.register`) are recovered so runtime-dispatched handlers stay connected.
 - **On-demand + cached.** Context is pulled **once, when needed**, then reused. Your 2nd/3rd/4th messages only process what you typed — not the whole codebase again. (First message builds it; the rest are fast.)
 - **Local & deterministic.** Everything runs on your machine — no cloud indexing, no API costs. Same input → same graph.
 - **Confidence tiers.** Every edge is tagged **tier‑4** (compiler/type-resolved), **tier‑2** (tree-sitter/heuristic), or **tier‑0** (hint), so the model knows what to trust.

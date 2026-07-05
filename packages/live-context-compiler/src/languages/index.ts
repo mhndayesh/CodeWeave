@@ -5,6 +5,7 @@ import { PythonIndexer } from "./python.js";
 import { RustIndexer } from "./rust.js";
 import { GoIndexer } from "./go.js";
 import { GenericIndexer } from "./generic.js";
+import { DocIndexer } from "./doc.js";
 import { treeSitterExtract } from "./treesitter.js";
 
 // Dedicated language indexers first; the generic fallback matches last so a
@@ -13,6 +14,7 @@ const indexers: LanguageIndexer[] = [
   new PythonIndexer(),
   new RustIndexer(),
   new GoIndexer(),
+  new DocIndexer(),
   new GenericIndexer(),
 ];
 

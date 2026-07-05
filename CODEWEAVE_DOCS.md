@@ -48,6 +48,7 @@ The AI pulls the code map on its own when it needs to. **You don't have to do an
 3. The AI calls the `context_compile` tool with a symbol/path/phrase → the compiler returns the relevant slice (definition + callers + references), already connected across files. The entry point is the **best** match for your query, not an arbitrary one.
 4. Edits update the graph **incrementally** — only changed files are re-analyzed, and re-indexing an unchanged project is near-instant.
 5. For Python, deep **type-aware (pyright)** resolution runs in the background and is **resumable** — re-index a big repo a few times and its precise coverage climbs toward complete, instead of stalling.
+6. The graph also captures **design intent**, which matters most in large codebases: each symbol's **doc-comment/docstring** is indexed (so a phrase query matches the prose, not just names) and shown next to the code; your **doc files** (`README`, `AGENTS.md`, `CONTEXT.md`, Markdown/rst/adoc) are indexed and the nearest one is attached to each slice; **entry points** (`bin`/`main`, `__main__`, conventional names) bias search toward where a reader would start; dynamic `import()`/`require()` stay in the import graph; and **decorator registrations** (`@Registry.register`) are recovered as edges so runtime-dispatched handlers remain connected to their registry.
 
 ---
 
