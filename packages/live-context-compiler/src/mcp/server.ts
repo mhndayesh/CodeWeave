@@ -331,6 +331,7 @@ export class McpServer {
           `Edges: ${stats.edges}`,
           `Dirty: ${stats.dirty}`,
           `Containers: ${stats.containers}`,
+          `Entry points: ${stats.entryPoints}`,
           `Cache entries: ${stats.cacheEntries}`,
           `FTS5: ${stats.hasFts ? "yes" : "no"}`,
         ].join("\n"),

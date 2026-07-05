@@ -278,6 +278,7 @@ if (command === "init") {
   console.log(`Edges: ${stats.edges}`);
   console.log(`Dirty: ${stats.dirty}`);
   console.log(`Containers: ${stats.containers}`);
+  console.log(`Entry points: ${stats.entryPoints}`);
   console.log(`Cache entries: ${stats.cacheEntries}`);
   console.log(`FTS5: ${stats.hasFts ? "yes" : "no"}`);
   store.close();

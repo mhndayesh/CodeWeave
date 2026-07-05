@@ -5,6 +5,7 @@ import { Parser, Language } from "web-tree-sitter";
 import type { CodeEdge, CodeNode, NodeKind } from "../types.js";
 import type { ExtractionResult } from "./base.js";
 import { makeNode, makeEdge, makeFileNode } from "./base.js";
+import { leadingCommentDoc, pythonDocstring, moduleDoc } from "./docstring.js";
 
 // Extension -> grammar name (must match a tree-sitter-<name>.wasm we ship).
 // JS/TS are intentionally excluded: they go through the real TypeScript compiler.
@@ -234,8 +235,15 @@ export function treeSitterExtract(text: string, filePath: string, root: string):
 
   const nodes: CodeNode[] = [];
   const edges: CodeEdge[] = [];
-  const fileNode = makeFileNode(filePath, text, root);
+  const fileNode = makeFileNode(filePath, text, root, moduleDoc(text));
   nodes.push(fileNode);
+
+  // Python carries its documentation as a docstring inside the body; every other
+  // grammar here documents a symbol with the comment block directly above it.
+  const docFor = (startLine: number): string | undefined =>
+    grammar === "python"
+      ? pythonDocstring(text, startLine) ?? leadingCommentDoc(text, startLine)
+      : leadingCommentDoc(text, startLine);
 
   const visit = (node: any, containerId: string, inContainer: boolean): void => {
     let nextContainer = containerId;
@@ -247,7 +255,7 @@ export function treeSitterExtract(text: string, filePath: string, root: string):
         const startLine = node.startPosition.row + 1;
         const endLine = node.endPosition.row + 1;
         const finalKind: NodeKind = kind === "function" && inContainer ? "method" : kind;
-        const codeNode = makeNode(root, finalKind, name, filePath, startLine, endLine, grammar);
+        const codeNode = makeNode(root, finalKind, name, filePath, startLine, endLine, grammar, undefined, docFor(startLine));
         nodes.push(codeNode);
         edges.push(makeEdge(containerId, codeNode.identity.stableId, "CONTAINS"));
         if (spec.containers.has(node.type)) {

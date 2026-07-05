@@ -14,7 +14,7 @@ export interface LanguageIndexer {
   extract(text: string, filePath: string, root: string): ExtractionResult;
 }
 
-export function makeFileNode(filePath: string, text: string, root: string): CodeNode {
+export function makeFileNode(filePath: string, text: string, root: string, doc?: string): CodeNode {
   return {
     identity: {
       stableId: stableId(root, "generic", `file:${filePath}`),
@@ -26,6 +26,7 @@ export function makeFileNode(filePath: string, text: string, root: string): Code
     filePath,
     startLine: 1,
     endLine: text.split("\n").length,
+    doc,
     language: "generic",
   };
 }
@@ -39,6 +40,7 @@ export function makeNode(
   endLine: number,
   language: string,
   signature?: string,
+  doc?: string,
 ): CodeNode {
   const qualifiedName = `${kind}:${filePath}:${name}`;
   return {
@@ -53,6 +55,7 @@ export function makeNode(
     startLine,
     endLine,
     signature,
+    doc,
     language,
   };
 }

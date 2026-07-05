@@ -2,6 +2,7 @@ import type { CodeEdge, CodeNode } from "../types.js";
 import { VERIFICATION } from "../types.js";
 import type { ExtractionResult, LanguageIndexer } from "./base.js";
 import { makeNode, makeEdge, makeFileNode } from "./base.js";
+import { leadingCommentDoc, moduleDoc } from "./docstring.js";
 
 // Heuristic, language-agnostic fallback for source files that have no dedicated
 // indexer. Produces a file node plus coarse function/class nodes and unresolved
@@ -24,7 +25,7 @@ export class GenericIndexer implements LanguageIndexer {
   extract(text: string, filePath: string, root: string): ExtractionResult {
     const nodes: CodeNode[] = [];
     const edges: CodeEdge[] = [];
-    const fileNode = makeFileNode(filePath, text, root);
+    const fileNode = makeFileNode(filePath, text, root, moduleDoc(text));
     nodes.push(fileNode);
 
     // Skip obviously non-source or minified content (no newlines / too big).
@@ -37,7 +38,7 @@ export class GenericIndexer implements LanguageIndexer {
       if (!name || seen.has(kind + ":" + name)) return;
       seen.add(kind + ":" + name);
       const lineNum = text.slice(0, index).split("\n").length;
-      const node = makeNode(root, kind, name, filePath, lineNum, lineNum + 1, "generic");
+      const node = makeNode(root, kind, name, filePath, lineNum, lineNum + 1, "generic", undefined, leadingCommentDoc(text, lineNum));
       nodes.push(node);
       edges.push(makeEdge(fileNode.identity.stableId, node.identity.stableId, "CONTAINS"));
     };

@@ -12,6 +12,7 @@ import type {
 export class GraphStore {
   private db: DatabaseSync;
   private hasFts = false;
+  private entryCache?: Set<string>;
 
   constructor(dbPath = ".context-graph.sqlite") {
     this.db = new DatabaseSync(dbPath);
@@ -37,6 +38,7 @@ export class GraphStore {
         start_line INTEGER NOT NULL DEFAULT 0,
         end_line INTEGER NOT NULL DEFAULT 0,
         signature TEXT,
+        doc TEXT,
         language TEXT NOT NULL DEFAULT 'ts'
       );
       CREATE INDEX IF NOT EXISTS nodes_file_idx ON nodes(file_path);
@@ -84,6 +86,12 @@ export class GraphStore {
       CREATE TABLE IF NOT EXISTS lsp_resolved_files (
         file_path TEXT PRIMARY KEY,
         resolved_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE TABLE IF NOT EXISTS entry_points (
+        file_path TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
 
       CREATE TABLE IF NOT EXISTS containers (
@@ -136,7 +144,37 @@ export class GraphStore {
       CREATE INDEX IF NOT EXISTS cd_dep_idx ON container_deps(dependency_id);
     `);
 
+    // `doc` was added after the initial release. Older databases have a nodes table
+    // without it; add it in place so a warm re-index fills docstrings instead of forcing
+    // a full rebuild. Errors ("duplicate column") mean it already exists — ignore them.
+    if (!this.hasColumn("nodes", "doc")) {
+      try {
+        this.db.exec("ALTER TABLE nodes ADD COLUMN doc TEXT;");
+      } catch {
+        // column already present, or table just created with it — nothing to do
+      }
+    }
+
+    this.migrateFts();
+  }
+
+  // Create (or migrate) the FTS5 index. `doc` joined the indexed columns after the
+  // initial release; an external-content fts5 table's schema is fixed at creation, so a
+  // legacy index missing `doc` is dropped and rebuilt from the (already-populated) nodes
+  // table. The graph store is rebuildable, but rebuilding just the FTS avoids a full re-index.
+  private migrateFts(): void {
     try {
+      const ftsExists = this.tableExists("nodes_fts");
+      const ftsStale = ftsExists && !this.ftsHasDoc();
+      if (ftsStale) {
+        this.db.exec(`
+          DROP TRIGGER IF EXISTS nodes_ai;
+          DROP TRIGGER IF EXISTS nodes_ad;
+          DROP TRIGGER IF EXISTS nodes_au;
+          DROP TABLE IF EXISTS nodes_fts;
+        `);
+      }
+
       this.db.exec(
         `CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(
           stable_id UNINDEXED,
@@ -145,6 +183,7 @@ export class GraphStore {
           qualified_name,
           file_path UNINDEXED,
           signature,
+          doc,
           content='nodes',
           content_rowid='rowid'
         )`,
@@ -152,23 +191,53 @@ export class GraphStore {
       this.hasFts = true;
       this.db.exec(`
         CREATE TRIGGER IF NOT EXISTS nodes_ai AFTER INSERT ON nodes BEGIN
-          INSERT INTO nodes_fts(rowid, stable_id, kind, name, qualified_name, file_path, signature)
-          VALUES (new.rowid, new.stable_id, new.kind, new.name, new.qualified_name, new.file_path, new.signature);
+          INSERT INTO nodes_fts(rowid, stable_id, kind, name, qualified_name, file_path, signature, doc)
+          VALUES (new.rowid, new.stable_id, new.kind, new.name, new.qualified_name, new.file_path, new.signature, new.doc);
         END;
         CREATE TRIGGER IF NOT EXISTS nodes_ad AFTER DELETE ON nodes BEGIN
-          INSERT INTO nodes_fts(nodes_fts, rowid, stable_id, kind, name, qualified_name, file_path, signature)
-          VALUES ('delete', old.rowid, old.stable_id, old.kind, old.name, old.qualified_name, old.file_path, old.signature);
+          INSERT INTO nodes_fts(nodes_fts, rowid, stable_id, kind, name, qualified_name, file_path, signature, doc)
+          VALUES ('delete', old.rowid, old.stable_id, old.kind, old.name, old.qualified_name, old.file_path, old.signature, old.doc);
         END;
         CREATE TRIGGER IF NOT EXISTS nodes_au AFTER UPDATE ON nodes BEGIN
-          INSERT INTO nodes_fts(nodes_fts, rowid, stable_id, kind, name, qualified_name, file_path, signature)
-          VALUES ('delete', old.rowid, old.stable_id, old.kind, old.name, old.qualified_name, old.file_path, old.signature);
-          INSERT INTO nodes_fts(rowid, stable_id, kind, name, qualified_name, file_path, signature)
-          VALUES (new.rowid, new.stable_id, new.kind, new.name, new.qualified_name, new.file_path, new.signature);
+          INSERT INTO nodes_fts(nodes_fts, rowid, stable_id, kind, name, qualified_name, file_path, signature, doc)
+          VALUES ('delete', old.rowid, old.stable_id, old.kind, old.name, old.qualified_name, old.file_path, old.signature, old.doc);
+          INSERT INTO nodes_fts(rowid, stable_id, kind, name, qualified_name, file_path, signature, doc)
+          VALUES (new.rowid, new.stable_id, new.kind, new.name, new.qualified_name, new.file_path, new.signature, new.doc);
         END;
       `);
+      if (ftsStale) {
+        // Repopulate the freshly recreated index from existing rows.
+        this.db.exec("INSERT INTO nodes_fts(nodes_fts) VALUES('rebuild');");
+      }
     } catch {
       this.hasFts = false;
     }
+  }
+
+  private hasColumn(table: string, column: string): boolean {
+    try {
+      const rows = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+      return rows.some((r) => r.name === column);
+    } catch {
+      return false;
+    }
+  }
+
+  private tableExists(name: string): boolean {
+    try {
+      const row = this.db
+        .prepare("SELECT 1 FROM sqlite_master WHERE type IN ('table','view') AND name = ?")
+        .get(name);
+      return Boolean(row);
+    } catch {
+      return false;
+    }
+  }
+
+  private ftsHasDoc(): boolean {
+    // fts5 virtual tables report their columns through table_info; a legacy index
+    // predates the `doc` column.
+    return this.hasColumn("nodes_fts", "doc");
   }
 
   hasFts5(): boolean {
@@ -180,8 +249,8 @@ export class GraphStore {
   upsertNode(node: CodeNode): void {
     this.db
       .prepare(
-        `INSERT INTO nodes(stable_id, version_hash, previous_stable_id, kind, name, qualified_name, file_path, start_line, end_line, signature, language)
-       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO nodes(stable_id, version_hash, previous_stable_id, kind, name, qualified_name, file_path, start_line, end_line, signature, doc, language)
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(stable_id) DO UPDATE SET
          version_hash=excluded.version_hash,
          previous_stable_id=COALESCE(excluded.previous_stable_id, nodes.previous_stable_id),
@@ -191,7 +260,8 @@ export class GraphStore {
          file_path=excluded.file_path,
          start_line=excluded.start_line,
          end_line=excluded.end_line,
-         signature=excluded.signature`,
+         signature=excluded.signature,
+         doc=excluded.doc`,
       )
       .run(
         node.identity.stableId,
@@ -204,6 +274,7 @@ export class GraphStore {
         node.startLine,
         node.endLine,
         node.signature ?? null,
+        node.doc ?? null,
         node.language,
       );
   }
@@ -216,7 +287,7 @@ export class GraphStore {
     const row = this.db
       .prepare(
         `SELECT stable_id, version_hash, previous_stable_id, kind, name, qualified_name,
-              file_path, start_line, end_line, signature, language
+              file_path, start_line, end_line, signature, doc, language
        FROM nodes WHERE stable_id = ?`,
       )
       .get(stableId) as Record<string, unknown> | undefined;
@@ -229,7 +300,7 @@ export class GraphStore {
     const rows = this.db
       .prepare(
         `SELECT stable_id, version_hash, previous_stable_id, kind, name, qualified_name,
-              file_path, start_line, end_line, signature, language
+              file_path, start_line, end_line, signature, doc, language
        FROM nodes WHERE stable_id IN (${placeholders})`,
       )
       .all(...stableIds) as Record<string, unknown>[];
@@ -242,6 +313,24 @@ export class GraphStore {
       .prepare(
         `SELECT stable_id, name, kind, file_path FROM nodes
          WHERE kind IN ('function','class','method','interface','enum','type')`,
+      )
+      .all() as Record<string, unknown>[];
+    return rows.map((r) => ({
+      id: r.stable_id as string,
+      name: r.name as string,
+      kind: r.kind as string,
+      filePath: r.file_path as string,
+    }));
+  }
+
+  // Like symbolDefinitions but also includes `variable` — registries are usually declared
+  // as an exported const (`const SOURCES = new Registry()`), so registration linking needs
+  // to resolve variable names too.
+  registrySymbols(): Array<{ id: string; name: string; kind: string; filePath: string }> {
+    const rows = this.db
+      .prepare(
+        `SELECT stable_id, name, kind, file_path FROM nodes
+         WHERE kind IN ('function','class','method','interface','enum','type','variable')`,
       )
       .all() as Record<string, unknown>[];
     return rows.map((r) => ({
@@ -482,13 +571,46 @@ export class GraphStore {
     this.clearDirty(filePath);
   }
 
+  // --- Entry points ---
+
+  // Files that are natural starting points (package.json bin/main, __main__, conventional
+  // names). Used to break search ties toward where a reader would actually start, so a
+  // query like "cli" surfaces the CLI entry file over an incidental substring match.
+  markEntryPoint(filePath: string, kind: string): void {
+    this.db
+      .prepare(
+        `INSERT INTO entry_points(file_path, kind) VALUES(?, ?)
+         ON CONFLICT(file_path) DO UPDATE SET kind=excluded.kind`,
+      )
+      .run(filePath, kind);
+    this.entryCache = undefined;
+  }
+
+  clearEntryPoints(): void {
+    this.db.exec("DELETE FROM entry_points");
+    this.entryCache = undefined;
+  }
+
+  entryPointFiles(): Set<string> {
+    if (!this.entryCache) {
+      const rows = this.db.prepare("SELECT file_path FROM entry_points").all() as Array<{ file_path: string }>;
+      this.entryCache = new Set(rows.map((r) => r.file_path));
+    }
+    return this.entryCache;
+  }
+
+  entryPointCount(): number {
+    const row = this.db.prepare("SELECT COUNT(*) as c FROM entry_points").get() as { c: number };
+    return row.c;
+  }
+
   // --- Query / search ---
 
   getFileNodesByPrefix(filePrefix: string): CodeNode[] {
     const rows = this.db
       .prepare(
         `SELECT stable_id, version_hash, previous_stable_id, kind, name, qualified_name,
-              file_path, start_line, end_line, signature, language
+              file_path, start_line, end_line, signature, doc, language
        FROM nodes WHERE kind = 'file' AND file_path LIKE ?`,
       )
       .all(`${filePrefix}%`) as Record<string, unknown>[];
@@ -509,7 +631,7 @@ export class GraphStore {
         const rows = this.db
           .prepare(
             `SELECT n.stable_id, n.version_hash, n.previous_stable_id, n.kind, n.name, n.qualified_name,
-                    n.file_path, n.start_line, n.end_line, n.signature, n.language
+                    n.file_path, n.start_line, n.end_line, n.signature, n.doc, n.language
              FROM nodes n
              JOIN nodes_fts fts ON n.stable_id = fts.stable_id
              WHERE nodes_fts MATCH ?
@@ -528,7 +650,7 @@ export class GraphStore {
     const rows = this.db
       .prepare(
         `SELECT stable_id, version_hash, previous_stable_id, kind, name, qualified_name,
-              file_path, start_line, end_line, signature, language
+              file_path, start_line, end_line, signature, doc, language
        FROM nodes
        WHERE name LIKE ? OR qualified_name LIKE ? OR file_path LIKE ?
        LIMIT ?`,
@@ -548,6 +670,7 @@ export class GraphStore {
   // preferring declared symbols over files, and keep the existing order within a tier.
   private rankMatches(nodes: CodeNode[], query: string): CodeNode[] {
     const q = query.trim().toLowerCase();
+    const entrySet = this.entryPointFiles();
     const kindRank = (n: CodeNode) => (n.kind === "file" ? 1 : 0);
     const nameRank = (n: CodeNode): number => {
       const name = n.name.toLowerCase();
@@ -557,8 +680,12 @@ export class GraphStore {
       if (n.qualifiedName.toLowerCase().includes(q)) return 3;
       return 4;
     };
+    // Entry-point membership is only a tiebreaker: an exact-name match in an ordinary
+    // file still beats a substring match in an entry file. It just decides between
+    // otherwise-equal candidates in favor of where a reader would start.
+    const entryRank = (n: CodeNode) => (entrySet.has(n.filePath) ? 0 : 1);
     return nodes
-      .map((n, i) => ({ n, i, score: nameRank(n) * 2 + kindRank(n) }))
+      .map((n, i) => ({ n, i, score: nameRank(n) * 4 + kindRank(n) * 2 + entryRank(n) }))
       .sort((a, b) => a.score - b.score || a.i - b.i)
       .map((x) => x.n);
   }
@@ -850,14 +977,14 @@ export class GraphStore {
 
   // --- Stats ---
 
-  getStats(): { files: number; nodes: number; edges: number; dirty: number; containers: number; cacheEntries: number; hasFts: boolean } {
+  getStats(): { files: number; nodes: number; edges: number; dirty: number; containers: number; entryPoints: number; cacheEntries: number; hasFts: boolean } {
     const fileCount = (this.db.prepare("SELECT COUNT(*) as c FROM indexed_files").get() as { c: number }).c;
     const nodeCount = (this.db.prepare("SELECT COUNT(*) as c FROM nodes").get() as { c: number }).c;
     const edgeCount = (this.db.prepare("SELECT COUNT(*) as c FROM edges").get() as { c: number }).c;
     const dirtyCount = (this.db.prepare("SELECT COUNT(*) as c FROM dirty_files").get() as { c: number }).c;
     const containerCount = (this.db.prepare("SELECT COUNT(*) as c FROM containers").get() as { c: number }).c;
     const cacheCount = (this.db.prepare("SELECT COUNT(*) as c FROM slice_cache").get() as { c: number }).c;
-    return { files: fileCount, nodes: nodeCount, edges: edgeCount, dirty: dirtyCount, containers: containerCount, cacheEntries: cacheCount, hasFts: this.hasFts };
+    return { files: fileCount, nodes: nodeCount, edges: edgeCount, dirty: dirtyCount, containers: containerCount, entryPoints: this.entryPointCount(), cacheEntries: cacheCount, hasFts: this.hasFts };
   }
 
   // --- Batch operations for performance ---
@@ -907,6 +1034,7 @@ export class GraphStore {
       startLine: row.start_line as number,
       endLine: row.end_line as number,
       signature: (row.signature as string) || undefined,
+      doc: (row.doc as string) || undefined,
       language: row.language as string,
     };
   }

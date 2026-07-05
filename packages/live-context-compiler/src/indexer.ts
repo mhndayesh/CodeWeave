@@ -9,6 +9,8 @@ import { runContractBridges, runContractFullScans } from "./contracts/index.js";
 import { getExclusion, redactSecrets } from "./security.js";
 import { getIndexerForFile, indexFileWithLanguage, getRegisteredExtensions } from "./languages/index.js";
 import { initTreeSitter } from "./languages/treesitter.js";
+import { normalizeDoc, moduleDoc } from "./languages/docstring.js";
+import { DOC_EXTENSIONS } from "./languages/doc.js";
 import { resolvePythonLsp } from "./lsp/python.js";
 import type { CodeEdge, CodeNode, EdgeKind, NodeKind } from "./types.js";
 import { VERIFICATION } from "./types.js";
@@ -37,6 +39,20 @@ const IGNORE = [
 ];
 const TS_SOURCE_METHOD = "typescript-compiler";
 
+// Filename stems that conventionally mark a program/module entry point. Kept deliberately
+// tight — `index` is excluded because barrel `index.ts` files are everywhere and would
+// dilute the signal to noise.
+const ENTRY_BASENAMES = new Set(["main", "cli", "server", "app", "__main__"]);
+
+// Flatten the string leaves of a package.json field (bin can be a string or a map,
+// exports a deeply nested conditions tree).
+function collectStrings(v: unknown, out: string[] = []): string[] {
+  if (typeof v === "string") out.push(v);
+  else if (Array.isArray(v)) for (const x of v) collectStrings(x, out);
+  else if (v && typeof v === "object") for (const x of Object.values(v)) collectStrings(x, out);
+  return out;
+}
+
 // Cross-file reference pass tuning. We only link a symbol whose name is defined
 // exactly once in the repo (high precision), is reasonably distinctive, and is
 // not a generic word — so heuristic edges stay useful rather than noisy.
@@ -49,6 +65,13 @@ const REF_STOPWORDS = new Set([
   "start", "close", "open", "read", "write", "build", "parse", "render", "update",
   "create", "delete", "remove", "apply", "format", "handler", "builder", "test",
 ]);
+
+// Registration-detection tuning. A decorator's root identifier (`@SOURCES.register` →
+// `SOURCES`) is captured, and the declaration it sits above is linked to it.
+const REGISTRATION_CAP_PER_FILE = 100;
+const DECORATOR_RE = /^\s*@\s*([A-Za-z_]\w*)/;
+const DECL_NAME_RE =
+  /\b(?:def|class|function|func|fn|const|let|var|interface|enum|struct|trait|type|object|val|record|module)\s+([A-Za-z_]\w*)/;
 
 // Best-effort, language-agnostic removal of comments and string literals so the
 // cross-reference name scan only sees code. Strings are stripped before line comments
@@ -120,10 +143,83 @@ export class TsRepositoryIndexer {
     if (changedLang.length > 0) {
       this.enrichReferences(changedLang);
     }
+    if (changedTs.length > 0 || changedLang.length > 0) {
+      this.enrichRegistrations([...changedTs, ...changedLang]);
+    }
     await this.resolveSemantics(langFiles);
     if (changedTs.length > 0 || changedLang.length > 0) {
       runContractFullScans(this.store, this.root);
+      this.detectEntryPoints(files, langFiles);
     }
+  }
+
+  // Discover natural starting points so search can bias its seed toward them. Recomputed
+  // whenever anything changed (cheap: a package.json glob plus a name check per file, and
+  // a content read only for Python files to spot a `__main__` guard). The set is a search
+  // tiebreaker only — never a hard filter — so over- or under-marking can't hide code.
+  private detectEntryPoints(tsFiles: string[], langFiles: string[]): void {
+    this.store.clearEntryPoints();
+
+    for (const pkgAbs of fg.sync("**/package.json", { cwd: this.root, ignore: this.ignore, absolute: true })) {
+      let json: Record<string, unknown>;
+      try {
+        json = JSON.parse(fs.readFileSync(pkgAbs, "utf8"));
+      } catch {
+        continue;
+      }
+      const dir = path.dirname(pkgAbs);
+      const fields: Array<[unknown, string]> = [
+        [json.bin, "bin"],
+        [json.main, "package-main"],
+        [json.module, "package-main"],
+        [json.exports, "package-main"],
+      ];
+      for (const [val, kind] of fields) {
+        for (const target of collectStrings(val)) {
+          const rel = this.resolveEntryTarget(dir, target);
+          if (rel) this.store.markEntryPoint(rel, kind);
+        }
+      }
+    }
+
+    for (const abs of [...tsFiles, ...langFiles]) {
+      const rel = path.relative(this.root, abs).replaceAll("\\", "/");
+      const stem = path.basename(rel).replace(/\.[^.]+$/, "").toLowerCase();
+      if (ENTRY_BASENAMES.has(stem)) {
+        this.store.markEntryPoint(rel, "convention");
+        continue;
+      }
+      if (rel.toLowerCase().endsWith(".py")) {
+        try {
+          if (/^\s*if\s+__name__\s*==\s*['"]__main__['"]\s*:/m.test(fs.readFileSync(abs, "utf8"))) {
+            this.store.markEntryPoint(rel, "main-guard");
+          }
+        } catch {
+          // unreadable; skip
+        }
+      }
+    }
+  }
+
+  // Map a package.json entry target to an indexed *source* file. `main`/`bin` usually point
+  // at built output (dist/*.js), so we also try the obvious source location (src/*.ts) and
+  // only mark a target that actually exists — a dangling build path marks nothing.
+  private resolveEntryTarget(dir: string, target: string): string | undefined {
+    if (!target) return undefined;
+    const base = target.replace(/^\.\//, "");
+    const candidates = new Set<string>([base, base.replace(/(^|\/)(dist|build|out|lib)\//, "$1src/")]);
+    for (const c of [...candidates]) {
+      for (const ext of [".ts", ".tsx", ".mts", ".cts"]) {
+        candidates.add(c.replace(/\.(js|cjs|mjs)$/, ext));
+      }
+    }
+    for (const c of candidates) {
+      const abs = path.join(dir, c);
+      if (this.isInsideRoot(abs) && fs.existsSync(abs) && fs.statSync(abs).isFile()) {
+        return path.relative(this.root, abs).replaceAll("\\", "/");
+      }
+    }
+    return undefined;
   }
 
   // A file needs (re)indexing when it has never been indexed, or its current content
@@ -209,6 +305,10 @@ export class TsRepositoryIndexer {
     const identRe = /[A-Za-z_][A-Za-z0-9_]*/g;
     for (const abs of langFiles) {
       if (!fs.existsSync(abs)) continue;
+      // Documentation is prose: every symbol name in it is a mention, not a reference.
+      // Scanning it would re-introduce exactly the false edges the comment-stripping above
+      // is meant to prevent, so doc files contribute nodes but never cross-ref edges.
+      if (DOC_EXTENSIONS.has(path.extname(abs).toLowerCase())) continue;
       const rel = path.relative(this.root, abs).replaceAll("\\", "/");
       const fileId = stableId(this.root, "generic", `file:${rel}`);
       // Scan code only: a name that appears solely in a comment or string literal is
@@ -231,6 +331,71 @@ export class TsRepositoryIndexer {
           metadata: { name: m[0] },
         });
         if (seen.size >= REF_CAP_PER_FILE) break;
+      }
+    }
+  }
+
+  // Decorator-based registration links a handler to the registry that dispatches to it at
+  // runtime — `@SOURCES.register` above `def haraj(...)`. Nothing statically *calls* haraj,
+  // so plain call resolution never connects the registry to its handlers; this recovers
+  // that edge. For a decorator whose root identifier resolves to a known symbol (the
+  // registry), emit a REFERENCES edge from the decorated definition to that registry.
+  //
+  // The edge is sourced from the in-file handler definition, so clearFile drops it on
+  // re-index (incrementally correct). Both ends must resolve to a single, distinctive
+  // definition, so framework decorators imported from libraries (`@Injectable`) and
+  // ambiguous names (`@app.route`) emit nothing — precise over noisy.
+  private enrichRegistrations(files: string[]): void {
+    if (files.length === 0) return;
+    const defs = this.store.registrySymbols();
+    if (defs.length === 0) return;
+
+    const byName = new Map<string, string>();
+    const ambiguous = new Set<string>();
+    for (const d of defs) {
+      const name = d.name;
+      if (name.length < REF_MIN_NAME_LENGTH || REF_STOPWORDS.has(name.toLowerCase())) continue;
+      if (ambiguous.has(name)) continue;
+      if (byName.has(name)) {
+        byName.delete(name);
+        ambiguous.add(name);
+        continue;
+      }
+      byName.set(name, d.id);
+    }
+    if (byName.size === 0) return;
+
+    for (const abs of files) {
+      if (!fs.existsSync(abs)) continue;
+      const rel = path.relative(this.root, abs).replaceAll("\\", "/");
+      if (getExclusion(rel)?.action === "skip") continue;
+      const lines = fs.readFileSync(abs, "utf8").split("\n");
+      let emitted = 0;
+      for (let i = 0; i < lines.length && emitted < REGISTRATION_CAP_PER_FILE; i++) {
+        const dm = DECORATOR_RE.exec(lines[i]);
+        if (!dm) continue;
+        const registryId = byName.get(dm[1]);
+        if (!registryId) continue;
+        // Advance past stacked decorators / blank / comment lines to the declaration.
+        let j = i + 1;
+        while (
+          j < lines.length &&
+          (lines[j].trim() === "" || DECORATOR_RE.test(lines[j]) || /^\s*(#|\/\/)/.test(lines[j]))
+        ) {
+          j++;
+        }
+        const nm = j < lines.length ? DECL_NAME_RE.exec(lines[j]) : null;
+        const handlerId = nm ? byName.get(nm[1]) : undefined;
+        if (!handlerId || handlerId === registryId) continue;
+        this.store.upsertEdge({
+          sourceId: handlerId,
+          targetId: registryId,
+          kind: "REFERENCES",
+          verification: VERIFICATION.PATTERN_MATCHED,
+          sourceMethod: "registry",
+          metadata: { via: "decorator", registry: dm[1] },
+        });
+        emitted++;
       }
     }
   }
@@ -416,6 +581,7 @@ export class TsRepositoryIndexer {
       filePath: rel,
       startLine: 1,
       endLine: ts.getLineAndCharacterOfPosition(source, source.end).line + 1,
+      doc: moduleDoc(text),
       language: "ts",
     };
   }
@@ -467,7 +633,13 @@ export class TsRepositoryIndexer {
     }
 
     if (ts.isCallExpression(node)) {
-      this.resolveCallExpression(node, source, childOwner, rel, context);
+      // Dynamic `import("...")` / `require("...")` are IMPORTS edges, not calls. Without
+      // this they resolved to nothing and were dropped as UNRESOLVED_CALL, so lazily-loaded
+      // modules (route lazy-loading, plugin loaders, code-split chunks) went missing from
+      // the import graph entirely.
+      if (!this.resolveDynamicImport(node, source, rel, context)) {
+        this.resolveCallExpression(node, source, childOwner, rel, context);
+      }
     }
 
     ts.forEachChild(node, (child) =>
@@ -511,6 +683,7 @@ export class TsRepositoryIndexer {
       startLine: start,
       endLine: end,
       signature: signature(node, source),
+      doc: leadingDoc(node, source),
       language: "ts",
     };
   }
@@ -719,6 +892,29 @@ export class TsRepositoryIndexer {
     }
   }
 
+  // Recognize a dynamic `import("...")` or `require("...")` with a static string
+  // specifier and record it as a module IMPORTS edge (from the file node, matching how
+  // static imports are stored). Returns true when it handled the call so the generic
+  // call resolver skips it. A non-literal `import(expr)` is still swallowed (returns true)
+  // to avoid emitting a useless UNRESOLVED_CALL for it.
+  private resolveDynamicImport(
+    node: ts.CallExpression,
+    source: ts.SourceFile,
+    rel: string,
+    context: ProgramContext,
+  ): boolean {
+    const isImportCall = node.expression.kind === ts.SyntaxKind.ImportKeyword;
+    const isRequire = ts.isIdentifier(node.expression) && node.expression.text === "require";
+    if (!isImportCall && !isRequire) return false;
+
+    const arg = node.arguments[0];
+    if (!arg || !ts.isStringLiteralLike(arg)) return isImportCall;
+
+    const fileId = stableId(this.root, "ts", `file:${rel}`);
+    this.addModuleImportEdge(source, rel, fileId, arg.text, context);
+    return true;
+  }
+
   private resolveCallExpression(
     node: ts.CallExpression,
     source: ts.SourceFile,
@@ -867,6 +1063,16 @@ function declarationName(node: ts.Node): string | undefined {
 
 function signature(node: ts.Node, source: ts.SourceFile): string {
   return node.getText(source).split("{")[0].trim().slice(0, 500);
+}
+
+// The JSDoc / leading comment immediately above a declaration, cleaned to a one-line
+// summary. Uses the comment ranges at the node's full start, which include the block
+// that precedes the `export`/modifier keywords, so `/** ... */ export function f` works.
+function leadingDoc(node: ts.Node, source: ts.SourceFile): string | undefined {
+  const ranges = ts.getLeadingCommentRanges(source.text, node.getFullStart());
+  if (!ranges || ranges.length === 0) return undefined;
+  const last = ranges[ranges.length - 1];
+  return normalizeDoc(source.text.slice(last.pos, last.end));
 }
 
 function hasModifier(

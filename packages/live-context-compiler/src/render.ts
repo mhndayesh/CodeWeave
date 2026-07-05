@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { CodeNode, ContextSlice } from "./types.js";
 import { VERIFICATION } from "./types.js";
+import { parseDocFile, DOC_FILENAMES } from "./languages/doc.js";
 
 // ─── Public types ─────────────────────────────────────────────────────
 
@@ -287,6 +288,24 @@ export function renderSlice(
   lines.push("");
   globalBudget -= headerCost;
 
+  // Attach the nearest project doc (README / AGENTS / CONTEXT …) to the entry file so
+  // the model gets the design intent around the code, not just the code. Small fixed
+  // cap; skipped entirely on tight budgets where every token belongs to source.
+  if (opts.maxTokens >= 1500) {
+    const entryNode = slice.nodes.find((n) => entrySet.has(n.identity.stableId));
+    const near = entryNode?.filePath ? findNearestDoc(root, entryNode.filePath) : undefined;
+    if (near) {
+      const cost = tok(near.summary.length + near.path.length + 12);
+      const cap = Math.min(300, Math.floor(opts.maxTokens * 0.08));
+      if (cost <= cap && cost <= globalBudget) {
+        emit(`// --- Nearest doc: ${near.path} ---`);
+        emit(`// » ${near.summary}`);
+        emit("");
+        globalBudget -= cost;
+      }
+    }
+  }
+
   // Pre-compute sorted nodes
   const sortedNodes = [...slice.nodes]
     .filter((n) => n.startLine > 0 && n.filePath)
@@ -331,6 +350,7 @@ export function renderSlice(
         emit(
           `>>> ENTRY ${entryNode.kind}: ${entryNode.qualifiedName} (${entryNode.filePath}:${entryNode.startLine}-${entryNode.endLine})`,
         );
+        if (entryNode.doc) emit(`// » ${entryNode.doc}`, tok(entryNode.doc.length + 6));
         emit("```");
         emit(excerpt.slice(0, Math.ceil(cost * CHARS_PER_TOKEN)));
         emit("```");
@@ -386,16 +406,27 @@ export function renderSlice(
         const cost = Math.min(excerptTokens, phaseBudget);
         if (cost < 10) continue;
         emit(`>>> ${node.kind}: ${node.qualifiedName} (${node.filePath}:${node.startLine}-${node.endLine})`);
+        if (node.doc) {
+          const dc = tok(node.doc.length + 6);
+          if (dc <= phaseBudget - cost) {
+            emit(`// » ${node.doc}`);
+            phaseBudget -= dc;
+            globalBudget -= dc;
+          }
+        }
         emit("```");
         emit(excerpt.slice(0, Math.ceil(cost * CHARS_PER_TOKEN)));
         emit("```");
         phaseBudget -= cost;
         globalBudget -= cost;
       } else if (node.signature) {
-        const sigTokens = tok(node.signature.length);
+        // For a signature-only node we can't show the body, so the one-line doc is
+        // where its intent comes from — fold it onto the signature line.
+        const docSuffix = node.doc ? `  — ${node.doc}` : "";
+        const sigTokens = tok(node.signature.length + docSuffix.length);
         if (sigTokens <= phaseBudget) {
           emit(`// SIG ${node.kind}: ${node.qualifiedName} (${node.filePath}:${node.startLine})`);
-          emit(`// ${node.signature}`);
+          emit(`// ${node.signature}${docSuffix}`);
           phaseBudget -= sigTokens;
           globalBudget -= sigTokens;
         }
@@ -463,6 +494,34 @@ export function renderSlice(
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────
+
+// Walk from the entry file's directory up to the repo root, returning the first project
+// doc found. Nearer directories win (a package's own README beats the root one); within
+// one directory, DOC_FILENAMES order decides (AGENTS/CONTEXT before README).
+function findNearestDoc(
+  root: string,
+  fromRelFile: string,
+): { path: string; summary: string } | undefined {
+  let dir = path.dirname(fromRelFile);
+  for (let guard = 0; guard < 40; guard++) {
+    for (const name of DOC_FILENAMES) {
+      const relPath = (dir === "." || dir === "" ? name : `${dir}/${name}`).replaceAll("\\", "/");
+      if (relPath === fromRelFile) continue;
+      const abs = path.join(root, relPath);
+      if (!fs.existsSync(abs)) continue;
+      try {
+        const { summary } = parseDocFile(fs.readFileSync(abs, "utf8"));
+        if (summary) return { path: relPath, summary };
+      } catch {
+        // unreadable doc; keep looking
+      }
+    }
+    const parent = path.dirname(dir);
+    if (dir === "." || dir === "" || parent === dir) break;
+    dir = parent;
+  }
+  return undefined;
+}
 
 function readExcerpt(node: CodeNode, root: string, contextLines: number): string {
   const abs = path.join(root, node.filePath);

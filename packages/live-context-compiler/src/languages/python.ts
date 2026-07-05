@@ -3,6 +3,7 @@ import type { CodeEdge, CodeNode } from "../types.js";
 import { VERIFICATION } from "../types.js";
 import type { ExtractionResult, LanguageIndexer } from "./base.js";
 import { makeNode, makeEdge, makeFileNode } from "./base.js";
+import { pythonDocstring, leadingCommentDoc, moduleDoc } from "./docstring.js";
 
 export class PythonIndexer implements LanguageIndexer {
   language = "python";
@@ -11,8 +12,11 @@ export class PythonIndexer implements LanguageIndexer {
   extract(text: string, filePath: string, root: string): ExtractionResult {
     const nodes: CodeNode[] = [];
     const edges: CodeEdge[] = [];
-    const fileNode = makeFileNode(filePath, text, root);
+    const fileNode = makeFileNode(filePath, text, root, moduleDoc(text));
     nodes.push(fileNode);
+
+    const docFor = (startLine: number): string | undefined =>
+      pythonDocstring(text, startLine) ?? leadingCommentDoc(text, startLine);
 
     // Line-based scan so methods/nested classes attach to their enclosing class
     // (CONTAINS) rather than the file, tracked by indentation.
@@ -30,7 +34,7 @@ export class PythonIndexer implements LanguageIndexer {
         const indent = classM[1].length;
         while (stack.length && stack[stack.length - 1].indent >= indent) stack.pop();
         const container = stack.length ? stack[stack.length - 1].id : fileNode.identity.stableId;
-        const node = makeNode(root, "class", classM[2], filePath, lineNum, lineNum + 1, "python");
+        const node = makeNode(root, "class", classM[2], filePath, lineNum, lineNum + 1, "python", undefined, docFor(lineNum));
         nodes.push(node);
         edges.push(makeEdge(container, node.identity.stableId, "CONTAINS"));
         stack.push({ indent, id: node.identity.stableId });
@@ -43,7 +47,7 @@ export class PythonIndexer implements LanguageIndexer {
         while (stack.length && stack[stack.length - 1].indent >= indent) stack.pop();
         const inClass = stack.length > 0;
         const container = inClass ? stack[stack.length - 1].id : fileNode.identity.stableId;
-        const node = makeNode(root, inClass ? "method" : "function", defM[2], filePath, lineNum, lineNum + 1, "python");
+        const node = makeNode(root, inClass ? "method" : "function", defM[2], filePath, lineNum, lineNum + 1, "python", undefined, docFor(lineNum));
         nodes.push(node);
         edges.push(makeEdge(container, node.identity.stableId, "CONTAINS"));
         continue;
