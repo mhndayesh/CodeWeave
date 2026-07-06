@@ -1,6 +1,0 @@
-- Precise code-understanding tool backed by a deterministic code graph (AST + TypeScript compiler + tree-sitter + pyright), NOT text search
-- Give it a symbol ("Session.request"), a file/dir path ("packages/core/src/auth"), or a plain phrase ("how login works")
-- Returns the resolved definition plus its callers, references, and call edges — already connected across files
-- Use this FIRST to understand code structure or "what calls what", instead of guessing with grep/glob/read
-- The graph builds itself on first use and updates incrementally; results are deterministic and cached (cheap to call repeatedly)
-- Prefer this over broad grep/glob whenever the task needs codebase understanding rather than a literal text match

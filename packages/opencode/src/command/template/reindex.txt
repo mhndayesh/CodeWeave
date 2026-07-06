@@ -1,1 +1,0 @@
-Call the `context_status` tool with `forceIndex` set to `true` to rebuild the code graph for this project from scratch (use this after large changes, branch switches, or if results look stale), then report the resulting file / node / edge counts.
