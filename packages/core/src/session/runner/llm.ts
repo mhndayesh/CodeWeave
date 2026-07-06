@@ -216,13 +216,22 @@ export const layer = Layer.effect(
       const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
       const context = entries.map((entry) => entry.message)
       const latestUser = latestUserText(context)
-      const liveContext = latestUser ? yield* LiveContext.systemContext(location.directory, latestUser) : undefined
+      // On-demand by default. Auto-injecting a graph slice here rebuilt the system prompt
+      // from the latest user message every turn — ~8k tokens that changed each turn and
+      // defeated prompt caching (the whole conversation gets reprocessed, brutal on local
+      // models). Instead we add a small STABLE hint (below) and let the model pull context
+      // through the context_* tools when it needs it (tool output is append-only history =
+      // cache-friendly). Set OPENCODE_LIVE_CONTEXT_AUTOINJECT=1 to restore always-on slices.
+      const liveContext =
+        process.env.OPENCODE_LIVE_CONTEXT_AUTOINJECT === "1" && latestUser
+          ? yield* LiveContext.systemContext(location.directory, latestUser)
+          : undefined
       const toolMaterialization = yield* tools.materialize(agent.info?.permissions)
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
       const request = LLM.request({
         model,
         providerOptions: { openai: { promptCacheKey } },
-        system: [agent.info?.system, system.baseline, liveContext]
+        system: [agent.info?.system, system.baseline, LiveContext.TOOL_HINT, liveContext]
           .filter((part): part is string => part !== undefined && part.length > 0)
           .map(SystemPart.make),
         messages: toLLMMessages(context, model),

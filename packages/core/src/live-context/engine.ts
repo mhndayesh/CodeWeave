@@ -16,6 +16,18 @@ export const DEFAULT_MAX_TOKENS = 12_000
 export const MIN_ALLOWED_TOKENS = 500
 export const MAX_ALLOWED_TOKENS = 50_000
 
+// A small, STABLE steering hint added to the system prompt every turn. It stays constant
+// (unlike an auto-injected slice, which changes per message and defeats prompt caching),
+// so it costs one cached prefix and nudges the model to pull context through the tool on
+// demand instead of grepping. This is the default; OPENCODE_LIVE_CONTEXT_AUTOINJECT=1
+// restores always-on slice injection.
+export const TOOL_HINT = [
+  "This project has a built-in Live Context Compiler: a precise, prebuilt code graph (TypeScript compiler + tree-sitter + pyright) stored at .context-graph.sqlite.",
+  "When you need to understand code — what calls what, where a symbol is defined, how a feature flows, or the shape of an unfamiliar area — call the `context_compile` tool FIRST (use `context_expand` to widen, `context_status` for graph stats).",
+  "It returns the definition with its callers and references already connected across files — cheaper and more accurate than grep/glob or reading files one by one. The graph builds itself on first use and updates incrementally.",
+  "Reserve grep/glob for literal text matches (a log string, a config key, a comment/TODO), not for understanding code structure.",
+].join("\n")
+
 // Cumulative token cap per "turn" (resets on user message)
 let cumulativeTokensUsed = 0
 const CUMULATIVE_MULTIPLIER = 2

@@ -1343,13 +1343,11 @@ export const layer = Layer.effect(
               process.env.OPENCODE_LIVE_CONTEXT_AUTOINJECT === "1" && latestUserText
                 ? yield* LiveContext.systemContext((yield* InstanceState.context).directory, latestUserText)
                 : undefined
-            const liveContextHint =
-              "This project has a built-in Live Context Compiler (a precise code graph). Call context_compile / context_expand / context_status to pull deterministic code structure on demand — prefer it over broad grep/glob when you need to understand the codebase. The graph builds itself on first use and updates incrementally."
             const system = [
               ...env,
               ...instructions,
               ...(skills ? [skills] : []),
-              ...(liveContext ? [liveContext] : [liveContextHint]),
+              ...(liveContext ? [liveContext] : [LiveContext.TOOL_HINT]),
             ]
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)

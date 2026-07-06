@@ -1,3 +1,4 @@
+- To understand code — what calls what, where a symbol is defined, how a feature flows — prefer the `context_compile` tool (a precise prebuilt code graph) FIRST. Use grep only for literal text matches (a string, config key, comment, or TODO), not to map code structure.
 - Fast content search tool that works with any codebase size
 - Searches file contents using regular expressions
 - Supports full regex syntax (eg. "log.*Error", "function\s+\w+", etc.)

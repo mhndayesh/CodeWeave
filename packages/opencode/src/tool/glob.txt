@@ -1,3 +1,4 @@
+- To find and understand code by meaning (a symbol, its definition, or how a feature connects), prefer the `context_compile` tool (a precise prebuilt code graph) FIRST. Use glob only when you need file paths by literal name pattern.
 - Fast file pattern matching tool that works with any codebase size
 - Supports glob patterns like "**/*.js" or "src/**/*.ts"
 - Returns matching file paths
