@@ -49,6 +49,7 @@ stats                   Node/edge/container/cache counts
 | `--query <s>` | — | Search string |
 | `--policy <name>` | `impact` | Traversal policy: `minimal`, `function_edit`, `endpoint_edit`, `schema_edit`, `impact` |
 | `--max-tokens <n>` | per-policy | Token budget for slice |
+| `--render-mode <mode>` | `balanced` | Render allocation: `balanced`, `source-first`, `edges-first` |
 
 ## Quick Start
 
@@ -59,13 +60,11 @@ npx tsx src/cli.ts index --root /path/to/repo
 npx tsx src/cli.ts slice --query login --policy impact --root /path/to/repo
 ```
 
-For a guided first run, see [ONBOARDING.md](./ONBOARDING.md).
-
 ## Architecture
 
 ### Core Graph (`src/types.ts`)
 
-- **13 node kinds**: file, function, class, method, interface, type, enum, variable, property, route, db_table, db_column, event, config, package
+- **15 node kinds**: file, function, class, method, interface, type, enum, variable, property, route, db_table, db_column, event, config, package
 - **20 edge kinds**: CONTAINS, IMPORTS, EXPORTS, EXTENDS, IMPLEMENTS, REFERENCES, CALLS, EXPOSES_ROUTE, CONSUMES_ROUTE, EMITS_EVENT, CONSUMES_EVENT, READS_TABLE, WRITES_TABLE, CONSUMES_API, EXPOSES_API, DEPENDS_ON_PACKAGE, UNRESOLVED_CALL, UNRESOLVED_IMPORT, OBSERVED_CALL, COVERS_LINE
 - **6 verification tiers**: UNRESOLVED=0, ANNOTATION_ONLY=1, PATTERN_MATCHED=2, VERIFIED_STATIC=3, VERIFIED_COMPILER=4, VERIFIED_RUNTIME=5
 - **SymbolIdentity**: `stableId` (SHA-256 of repo+lang+qualified-name) + `versionHash` (body hash) + lineage via `previousStableId`
@@ -156,13 +155,15 @@ npx tsx src/cli.ts serve --root /path/to/repo
 
 ### Tools
 
+These use the same `context_*` namespace as the in-agent tools (the standalone server is for external MCP clients; `context_expand_node` is named distinctly because it expands one graph node, unlike the agent's query-based `context_expand`).
+
 | Tool | Description |
 |------|-------------|
-| `compile_context` | Compile context slice from query + policy + token budget |
-| `expand_slice` | Expand existing slice with additional entry nodes |
-| `explore` | Query nodes and their connected edges |
-| `search` | Full-text search across node names |
-| `stats` | Repository statistics |
+| `context_compile` | Compile context slice from query + policy + token budget |
+| `context_expand_node` | Expand an existing slice node from Tier 2 to Tier 1 |
+| `context_explore` | Query nodes and their connected edges |
+| `context_search` | Full-text search across node names |
+| `context_status` | Repository statistics |
 
 ## Requirements
 
@@ -184,7 +185,7 @@ For the accuracy / speed / token / live-model benchmarks against public repos, s
 
 ```
 src/
-  cli.ts              — CLI entry point (18 commands)
+  cli.ts              — CLI entry point (15 commands)
   db.ts               — GraphStore (SQLite + FTS5)
   types.ts            — SymbolIdentity, 20 edge kinds, 6 verification tiers
   indexer.ts          — TS Compiler API indexer

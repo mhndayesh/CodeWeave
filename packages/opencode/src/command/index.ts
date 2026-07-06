@@ -10,6 +10,8 @@ import { Skill } from "../skill"
 import { EventV2 } from "@opencode-ai/core/event"
 import PROMPT_INITIALIZE from "./template/initialize.txt"
 import PROMPT_REVIEW from "./template/review.txt"
+import PROMPT_CONTEXT from "./template/context.txt"
+import PROMPT_REINDEX from "./template/reindex.txt"
 
 type State = {
   commands: Record<string, Info>
@@ -54,6 +56,8 @@ export function hints(template: string) {
 export const Default = {
   INIT: "init",
   REVIEW: "review",
+  CONTEXT: "context",
+  REINDEX: "reindex",
 } as const
 
 export interface Interface {
@@ -93,6 +97,24 @@ export const layer = Layer.effect(
         },
         subtask: true,
         hints: hints(PROMPT_REVIEW),
+      }
+      commands[Default.CONTEXT] = {
+        name: Default.CONTEXT,
+        description: "pull precise code-graph context for a symbol/path/question",
+        source: "command",
+        get template() {
+          return PROMPT_CONTEXT
+        },
+        hints: hints(PROMPT_CONTEXT),
+      }
+      commands[Default.REINDEX] = {
+        name: Default.REINDEX,
+        description: "rebuild the code graph from scratch",
+        source: "command",
+        get template() {
+          return PROMPT_REINDEX
+        },
+        hints: hints(PROMPT_REINDEX),
       }
 
       for (const [name, command] of Object.entries(cfg.command ?? {})) {

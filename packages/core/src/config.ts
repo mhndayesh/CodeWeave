@@ -106,7 +106,8 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   liveContextCompiler: Schema.Struct({
     ignorePatterns: Schema.String.pipe(Schema.Array, Schema.optional),
     defaultMaxTokens: Schema.optional(Schema.Number).annotate({
-      description: "Default max tokens for context compilation (default: 12000, max: 50000)",
+      description:
+        "Default max tokens for context compilation (default: 12000). A single call is capped at ~18000 and one turn at ~24000 by the compiler's safety limits, so larger values are clamped.",
     }),
     renderMode: Schema.optional(Schema.Literals(["balanced", "source-first", "edges-first"])).annotate({
       description: "Default render allocation mode: balanced (default), source-first, or edges-first",

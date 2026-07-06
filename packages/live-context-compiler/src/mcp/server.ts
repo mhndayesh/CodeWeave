@@ -53,7 +53,7 @@ export class McpServer {
           result: {
             tools: [
               {
-                name: "compile_context",
+                name: "context_compile",
                 description:
                   "Compile a context slice for a given query. Returns relevant code nodes and edges.",
                 inputSchema: {
@@ -71,7 +71,7 @@ export class McpServer {
                 },
               },
               {
-                name: "expand_slice",
+                name: "context_expand_node",
                 description: "Expand a specific node in a cached slice from Tier 2 to Tier 1.",
                 inputSchema: {
                   type: "object",
@@ -83,7 +83,7 @@ export class McpServer {
                 },
               },
               {
-                name: "explore",
+                name: "context_explore",
                 description: "Explore the graph around a node.",
                 inputSchema: {
                   type: "object",
@@ -100,7 +100,7 @@ export class McpServer {
                 },
               },
               {
-                name: "search",
+                name: "context_search",
                 description: "Search for nodes in the graph.",
                 inputSchema: {
                   type: "object",
@@ -112,7 +112,7 @@ export class McpServer {
                 },
               },
               {
-                name: "stats",
+                name: "context_status",
                 description: "Show graph statistics.",
                 inputSchema: { type: "object", properties: {} },
               },
@@ -125,15 +125,15 @@ export class McpServer {
         const args = (req.params?.arguments ?? {}) as Record<string, unknown>;
 
         switch (name) {
-          case "compile_context":
+          case "context_compile":
             return this.handleCompileContext(req.id, args);
-          case "expand_slice":
+          case "context_expand_node":
             return this.handleExpandSlice(req.id, args);
-          case "explore":
+          case "context_explore":
             return this.handleExplore(req.id, args);
-          case "search":
+          case "context_search":
             return this.handleSearch(req.id, args);
-          case "stats":
+          case "context_status":
             return this.handleStats(req.id);
           default:
             return {

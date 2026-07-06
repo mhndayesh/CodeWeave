@@ -60,11 +60,10 @@ The AI pulls the code map on its own when it needs to — **you don't have to do
 
 | Command | What it does |
 |---|---|
-| **`opencode`** | Start the assistant (your day-to-day tool) |
+| **`opencode`** | Start the assistant (your day-to-day tool). Installed as **`codeweave`** from the npm package. |
 | **`/context <symbol>`** | *(inside opencode)* force a precise graph pull, e.g. `/context Session.request` |
 | **`/reindex`** | *(inside opencode)* rebuild the graph after big changes |
-| **`opencode-graph`** | Build the graph directly in a terminal — **no AI**, pure indexer |
-| **`opencode-help`** | Print the quick cheat-sheet |
+| **`opencode graph`** | Build/inspect the graph in a terminal — **no AI**, pure indexer (`opencode graph reindex` to force-rebuild, `opencode graph slice --query <q>` to print a slice) |
 
 Full reference → **[COMMANDS.md](./COMMANDS.md)**.
 

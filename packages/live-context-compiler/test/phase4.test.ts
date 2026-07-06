@@ -179,7 +179,7 @@ describe("MCP Server", () => {
     server.close();
   });
 
-  it("compile_context returns content for a query", async () => {
+  it("context_compile returns content for a query", async () => {
     const root = createRepo("mcp-03", {
       "src/main.ts": "export function add(a: number, b: number) { return a + b; }",
     });
@@ -192,14 +192,14 @@ describe("MCP Server", () => {
     const server = new McpServer(dbPath, root);
     const resp = server.handleRequest({
       jsonrpc: "2.0", id: 1, method: "tools/call",
-      params: { name: "compile_context", arguments: { query: "add", policy: "minimal", maxTokens: 5000 } },
+      params: { name: "context_compile", arguments: { query: "add", policy: "minimal", maxTokens: 5000 } },
     });
     expect(resp.result).toBeDefined();
     expect((resp.result?.nodes as Array<unknown>)?.length).toBeGreaterThanOrEqual(1);
     server.close();
   });
 
-  it("search returns matching nodes", async () => {
+  it("context_search returns matching nodes", async () => {
     const root = createRepo("mcp-04", {
       "src/main.ts": "export function searchMe() { return 42; }",
     });
@@ -212,19 +212,19 @@ describe("MCP Server", () => {
     const server = new McpServer(dbPath, root);
     const resp = server.handleRequest({
       jsonrpc: "2.0", id: 1, method: "tools/call",
-      params: { name: "search", arguments: { query: "searchMe" } },
+      params: { name: "context_search", arguments: { query: "searchMe" } },
     });
     expect((resp.result?.nodes as Array<unknown>)?.length).toBeGreaterThanOrEqual(1);
     server.close();
   });
 
-  it("stats returns graph statistics", () => {
+  it("context_status returns graph statistics", () => {
     const root = createRepo("mcp-05", {});
     const dbPath = path.join(root, ".test.sqlite");
     const server = new McpServer(dbPath, root);
     const resp = server.handleRequest({
       jsonrpc: "2.0", id: 1, method: "tools/call",
-      params: { name: "stats", arguments: {} },
+      params: { name: "context_status", arguments: {} },
     });
     expect(resp.result?.files).toBeDefined();
     expect(resp.result?.nodes).toBeDefined();

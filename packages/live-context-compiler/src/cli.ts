@@ -299,6 +299,7 @@ Usage:
   import-test-trace       Import test trace JSON (--file <path>)
   import-otel             Import OTel traces JSON (--file <path>)
   import-coverage         Import lcov coverage (--file <path>)
+  security [status|check|redact]  Inspect exclusions, path guard, secret redaction
   serve                   Start MCP server (stdio)
   stats                   Show stats
 
