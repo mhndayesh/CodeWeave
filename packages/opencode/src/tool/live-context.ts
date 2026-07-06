@@ -1,7 +1,6 @@
 import { LiveContext } from "@opencode-ai/core/live-context"
 import { Effect, Schema } from "effect"
 import { InstanceState } from "@/effect/instance-state"
-import { Config } from "@/config/config"
 import DESCRIPTION from "./live-context.txt"
 import * as Tool from "./tool"
 
@@ -16,94 +15,64 @@ export const StatusParameters = Schema.Struct({
   forceIndex: Schema.optional(Schema.Boolean).annotate({ description: "Rebuild the graph from scratch first." }),
 })
 
-// Read the `liveContextCompiler` block from the user's config once at tool init and
-// close over it, so these tools honor ignorePatterns / defaultMaxTokens / renderMode the
-// same way the core builtin tools do. (execute must stay requirement-free — Def.execute is
-// R=never — so the read happens here, in the init effect, not per call.)
-const liveContextConfig = Effect.gen(function* () {
-  const config = yield* Config.Service
-  const cfg = yield* config.get()
-  const lcc = cfg.liveContextCompiler
-  return {
-    ignorePatterns: lcc?.ignorePatterns,
-    defaultMaxTokens: lcc?.defaultMaxTokens,
-    renderMode: lcc?.renderMode,
-  }
-})
-
+// NOTE: init must stay requirement-free. Tool inits are evaluated during instance
+// load, before InstanceRef is provided, so reading per-instance config here (via
+// opencode's Config.Service, which is InstanceState-backed) dies with "InstanceRef
+// not provided" and breaks every command + the TUI. The `liveContextCompiler`
+// config block is honored by the core builtin tool surface (packages/core/src/tool/
+// live-context.ts), which reads location-scoped config that needs no InstanceRef.
 export const ContextCompileTool = Tool.define(
   "context_compile",
-  Effect.gen(function* () {
-    const cfg = yield* liveContextConfig
-    return {
-      description: DESCRIPTION,
-      parameters: CompileParameters,
-      execute: (params: Schema.Schema.Type<typeof CompileParameters>) =>
-        Effect.gen(function* () {
-          const instance = yield* InstanceState.context
-          const output = yield* LiveContext.compile({
-            root: instance.directory,
-            query: params.query,
-            maxTokens: cfg.defaultMaxTokens,
-            renderMode: cfg.renderMode,
-            ignorePatterns: cfg.ignorePatterns,
-          })
-          return {
-            title: params.query,
-            metadata: { query: params.query, truncated: false },
-            output,
-          }
-        }).pipe(Effect.catch((error: unknown) => unavailable(params.query, error, { query: params.query }))),
-    }
+  Effect.succeed({
+    description: DESCRIPTION,
+    parameters: CompileParameters,
+    execute: (params: Schema.Schema.Type<typeof CompileParameters>) =>
+      Effect.gen(function* () {
+        const instance = yield* InstanceState.context
+        const output = yield* LiveContext.compile({ root: instance.directory, query: params.query })
+        return {
+          title: params.query,
+          metadata: { query: params.query, truncated: false },
+          output,
+        }
+      }).pipe(Effect.catch((error: unknown) => unavailable(params.query, error, { query: params.query }))),
   }),
 )
 
 export const ContextExpandTool = Tool.define(
   "context_expand",
-  Effect.gen(function* () {
-    const cfg = yield* liveContextConfig
-    return {
-      description:
-        "Pull an additional code-graph slice for another symbol/path/phrase while staying graph-first. Same as context_compile — use it to widen understanding to an adjacent piece of code.",
-      parameters: CompileParameters,
-      execute: (params: Schema.Schema.Type<typeof CompileParameters>) =>
-        Effect.gen(function* () {
-          const instance = yield* InstanceState.context
-          const output = yield* LiveContext.compile({
-            root: instance.directory,
-            query: params.query,
-            maxTokens: cfg.defaultMaxTokens,
-            renderMode: cfg.renderMode,
-            ignorePatterns: cfg.ignorePatterns,
-          })
-          return {
-            title: params.query,
-            metadata: { query: params.query, truncated: false },
-            output,
-          }
-        }).pipe(Effect.catch((error: unknown) => unavailable(params.query, error, { query: params.query }))),
-    }
+  Effect.succeed({
+    description:
+      "Pull an additional code-graph slice for another symbol/path/phrase while staying graph-first. Same as context_compile — use it to widen understanding to an adjacent piece of code.",
+    parameters: CompileParameters,
+    execute: (params: Schema.Schema.Type<typeof CompileParameters>) =>
+      Effect.gen(function* () {
+        const instance = yield* InstanceState.context
+        const output = yield* LiveContext.compile({ root: instance.directory, query: params.query })
+        return {
+          title: params.query,
+          metadata: { query: params.query, truncated: false },
+          output,
+        }
+      }).pipe(Effect.catch((error: unknown) => unavailable(params.query, error, { query: params.query }))),
   }),
 )
 
 export const ContextStatusTool = Tool.define(
   "context_status",
-  Effect.gen(function* () {
-    const cfg = yield* liveContextConfig
-    return {
-      description: "Show the code-graph status (file/node/edge counts) for the current project. Pass forceIndex to rebuild it.",
-      parameters: StatusParameters,
-      execute: (params: Schema.Schema.Type<typeof StatusParameters>) =>
-        Effect.gen(function* () {
-          const instance = yield* InstanceState.context
-          const output = yield* LiveContext.status(instance.directory, params.forceIndex, cfg.ignorePatterns)
-          return {
-            title: "Live Context status",
-            metadata: { truncated: false },
-            output,
-          }
-        }).pipe(Effect.catch((error: unknown) => unavailable("Live Context status", error))),
-    }
+  Effect.succeed({
+    description: "Show the code-graph status (file/node/edge counts) for the current project. Pass forceIndex to rebuild it.",
+    parameters: StatusParameters,
+    execute: (params: Schema.Schema.Type<typeof StatusParameters>) =>
+      Effect.gen(function* () {
+        const instance = yield* InstanceState.context
+        const output = yield* LiveContext.status(instance.directory, params.forceIndex)
+        return {
+          title: "Live Context status",
+          metadata: { truncated: false },
+          output,
+        }
+      }).pipe(Effect.catch((error: unknown) => unavailable("Live Context status", error))),
   }),
 )
 
